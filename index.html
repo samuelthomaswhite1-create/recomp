@@ -1,0 +1,2217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Recomp">
+<meta name="theme-color" content="#0a0a0a">
+<link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='40' fill='%230a0a0a'/><g stroke='%23ff6b35' stroke-width='14' stroke-linecap='round' fill='none'><line x1='30' y1='90' x2='150' y2='90'/><line x1='40' y1='65' x2='40' y2='115'/><line x1='140' y1='65' x2='140' y2='115'/><line x1='55' y1='75' x2='55' y2='105'/><line x1='125' y1='75' x2='125' y2='105'/></g></svg>">
+<title>Recomp Tracker</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --surface: #161616;
+    --surface-2: #1f1f1f;
+    --border: #2a2a2a;
+    --text: #f5f5f5;
+    --muted: #a0a0a0;
+    --dim: #707070;
+    --accent: #ff6b35;
+    --accent-dim: #b34a22;
+    --success: #4ade80;
+    --warn: #facc15;
+    --danger: #f87171;
+    --aerobic: #60a5fa;
+    --night: #a78bfa;
+    --postnights: #f472b6;
+    --safe-top: env(safe-area-inset-top);
+    --safe-bottom: env(safe-area-inset-bottom);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 16px; line-height: 1.4;
+    overscroll-behavior: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    min-height: 100vh;
+    padding-top: var(--safe-top);
+    padding-bottom: calc(72px + var(--safe-bottom));
+  }
+  button {
+    font: inherit; color: inherit;
+    background: none; border: none; padding: 0; cursor: pointer;
+  }
+  input, select, textarea {
+    font: inherit; color: inherit;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    width: 100%;
+    outline: none;
+  }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+  input[type="checkbox"] { width: auto; }
+  h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  h1 { font-size: 22px; }
+  h2 { font-size: 18px; }
+  h3 { font-size: 15px; }
+  .muted { color: var(--muted); }
+  .dim { color: var(--dim); }
+  .pill {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .pill.night { background: rgba(167, 139, 250, 0.18); color: var(--night); }
+  .pill.day   { background: rgba(96, 165, 250, 0.15); color: var(--aerobic); }
+  .pill.post-nights { background: rgba(244, 114, 182, 0.18); color: var(--postnights); }
+  .pill.deload { background: rgba(250, 204, 21, 0.15); color: var(--warn); }
+  .pill.phase-1 { background: rgba(255, 107, 53, 0.15); color: var(--accent); }
+  .pill.phase-2 { background: rgba(96, 165, 250, 0.15); color: var(--aerobic); }
+  .pill.phase-3 { background: rgba(74, 222, 128, 0.15); color: var(--success); }
+
+  header.topbar {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(10, 10, 10, 0.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 16px 10px;
+  }
+  .top-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+  }
+  .top-row .nav-btn {
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 10px;
+    background: var(--surface-2);
+    font-size: 18px;
+    color: var(--muted);
+  }
+  .top-row .nav-btn:active { background: var(--border); }
+  .top-row .date-block { text-align: center; flex: 1; }
+  .top-row .date-block .date { font-weight: 700; font-size: 17px; }
+  .top-row .date-block .sub { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .phase-row {
+    display: flex; gap: 6px; align-items: center; justify-content: center;
+    margin-top: 10px; flex-wrap: wrap;
+  }
+
+  main { padding: 16px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .card-title {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+    gap: 10px;
+  }
+  .card-title h2 { font-size: 17px; }
+
+  .quick-entry {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  }
+  .quick-entry label { font-size: 12px; color: var(--muted); margin-bottom: 6px; display: block; text-transform: uppercase; letter-spacing: 0.04em; }
+  .quick-entry .field input {
+    text-align: center; font-size: 22px; font-weight: 700;
+    padding: 14px 10px;
+  }
+  .quick-entry .unit { font-size: 11px; color: var(--dim); margin-top: 6px; text-align: center; }
+
+  .session-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+  .session-card.completed { border-color: rgba(74, 222, 128, 0.35); }
+  .session-head {
+    padding: 14px 16px;
+    display: flex; align-items: center; gap: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .session-tag {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--accent);
+  }
+  .session-card[data-type="run"] .session-tag,
+  .session-card[data-type="swim"] .session-tag { color: var(--aerobic); }
+  .session-card[data-type="rest"] .session-tag { color: var(--dim); }
+  .session-head-body { flex: 1; }
+  .session-head-body .name { font-weight: 600; font-size: 16px; }
+  .session-head-body .meta { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .session-check {
+    width: 32px; height: 32px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .session-check.on { background: var(--success); border-color: var(--success); color: #0a0a0a; }
+  .session-body {
+    padding: 0 16px 14px;
+    border-top: 1px solid var(--border);
+    margin-top: 0;
+  }
+  .session-body.collapsed { display: none; }
+
+  .exercise {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .exercise:last-child { border-bottom: none; }
+  .exercise-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .exercise-name { font-weight: 600; font-size: 15px; }
+  .exercise-target { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .set-row {
+    display: grid;
+    grid-template-columns: 20px 1fr 1fr 1fr 36px;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .set-row .set-num { font-size: 12px; color: var(--dim); text-align: center; }
+  .set-row input {
+    padding: 8px 6px; font-size: 14px; text-align: center;
+    background: var(--surface-2);
+  }
+  .set-row .set-check {
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    background: var(--surface-2);
+    border: 1.5px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  .set-row .set-check.on { background: var(--success); border-color: var(--success); color: #0a0a0a; }
+  .set-row.header { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .set-row.header > span { text-align: center; }
+  .suggested {
+    font-size: 11px; color: var(--accent); margin-top: 4px;
+  }
+
+  .cardio-log {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
+    margin-top: 8px;
+  }
+  .cardio-log .field { display: flex; flex-direction: column; gap: 4px; }
+  .cardio-log label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .cardio-log input { font-size: 15px; padding: 8px; text-align: center; }
+
+  .notes-input {
+    margin-top: 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-height: 38px;
+    font-size: 14px;
+    resize: vertical;
+  }
+
+  .day-complete-btn {
+    width: 100%;
+    padding: 16px;
+    border-radius: 14px;
+    background: var(--accent);
+    color: #0a0a0a;
+    font-weight: 700;
+    font-size: 16px;
+    margin-top: 6px;
+  }
+  .day-complete-btn.on { background: var(--success); }
+  .day-complete-btn:disabled { background: var(--surface-2); color: var(--dim); }
+
+  nav.tabs {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: rgba(10, 10, 10, 0.95);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-top: 1px solid var(--border);
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    padding: 8px 4px calc(8px + var(--safe-bottom));
+    z-index: 20;
+  }
+  nav.tabs button {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 6px 4px;
+    color: var(--dim);
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    border-radius: 10px;
+  }
+  nav.tabs button .icon { font-size: 20px; }
+  nav.tabs button.active { color: var(--accent); }
+
+  /* Stats view */
+  .stat-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    margin-bottom: 14px;
+  }
+  .stat-tile {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .stat-tile .label {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .stat-tile .value {
+    font-size: 24px; font-weight: 700; margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-tile .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .stat-tile.delta-good .value { color: var(--success); }
+  .stat-tile.delta-warn .value { color: var(--warn); }
+  .stat-tile.delta-bad  .value { color: var(--danger); }
+
+  .chart-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .chart-wrap h3 { margin-bottom: 4px; }
+  .chart-wrap .legend {
+    font-size: 11px; color: var(--muted); margin-bottom: 8px;
+    display: flex; gap: 12px; flex-wrap: wrap;
+  }
+  .chart-wrap .legend .key {
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .chart-wrap .legend .swatch {
+    display: inline-block; width: 14px; height: 3px; border-radius: 2px;
+  }
+  .chart-wrap svg { display: block; width: 100%; height: auto; }
+
+  /* Calendar view */
+  .cal-controls {
+    display: flex; gap: 8px; margin-bottom: 12px; align-items: center;
+  }
+  .cal-controls button.month-nav {
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .cal-controls .month-label {
+    flex: 1; text-align: center; font-weight: 700; font-size: 16px;
+  }
+  .cal-controls button.print-btn {
+    padding: 10px 14px;
+    background: var(--accent); color: #0a0a0a;
+    border-radius: 10px; font-weight: 700; font-size: 13px;
+  }
+  .cal-grid {
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
+    margin-bottom: 16px;
+  }
+  .cal-grid .dow {
+    text-align: center; font-size: 10px;
+    color: var(--dim); padding: 4px 0;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .cal-day {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 5px;
+    min-height: 64px;
+    font-size: 11px;
+    color: var(--muted);
+    display: flex; flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+  }
+  .cal-day.empty { background: transparent; border: none; }
+  .cal-day.today { border-color: var(--accent); }
+  .cal-day .dnum { font-weight: 700; color: var(--text); font-size: 13px; }
+  .cal-day .ses { font-size: 9px; line-height: 1.15; color: var(--muted); }
+  .cal-day .ses.lift { color: var(--accent); }
+  .cal-day .ses.run, .cal-day .ses.swim { color: var(--aerobic); }
+  .cal-day .ses.rest { color: var(--dim); }
+  .cal-day.completed { background: rgba(74, 222, 128, 0.08); border-color: rgba(74, 222, 128, 0.35); }
+  .cal-day .wt-pill {
+    font-size: 9px;
+    color: var(--dim);
+    margin-top: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Settings view */
+  .settings-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+  .settings-row:last-child { border-bottom: none; }
+  .settings-row .label { font-size: 14px; }
+  .settings-row .label .desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .settings-row input, .settings-row select {
+    width: 130px; padding: 8px 10px; font-size: 14px; text-align: right;
+  }
+  .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+  .btn {
+    flex: 1; padding: 12px; border-radius: 10px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    font-weight: 600; font-size: 14px;
+  }
+  .btn.primary { background: var(--accent); color: #0a0a0a; border-color: var(--accent); }
+  .btn.danger { background: rgba(248, 113, 113, 0.15); color: var(--danger); border-color: rgba(248, 113, 113, 0.4); }
+
+  .roster-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+    margin-top: 8px;
+  }
+  .roster-row {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 6px;
+  }
+  .roster-row select {
+    background: transparent; border: none; padding: 0;
+    font-size: 11px; font-weight: 600;
+    text-align: right; width: auto;
+  }
+
+  /* Print: PDF calendar */
+  @page { size: A4 landscape; margin: 8mm; }
+  .print-root { display: none; }
+  @media print {
+    html, body {
+      background: white !important; color: black !important;
+      padding: 0; margin: 0;
+    }
+    body > *:not(.print-root) { display: none !important; }
+    .print-root { display: block !important; }
+    .print-month {
+      page-break-after: always;
+      page-break-inside: avoid;
+      break-after: page;
+      width: 281mm;
+      height: 194mm;
+      padding: 0;
+      margin: 0 auto;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: black;
+    }
+    .print-month:last-child { page-break-after: auto; }
+    .print-header {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin-bottom: 4mm;
+      border-bottom: 0.5mm solid black;
+      padding-bottom: 2mm;
+    }
+    .print-header h1 { font-size: 22pt; font-weight: 700; }
+    .print-header .sub { font-size: 9pt; color: #444; }
+    .print-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      grid-auto-rows: 1fr;
+      gap: 1mm;
+      height: 170mm;
+    }
+    .print-grid .dow {
+      font-size: 8pt; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.04em;
+      text-align: center;
+      padding: 1mm 0;
+      border-bottom: 0.3mm solid #999;
+    }
+    .print-day {
+      border: 0.2mm solid #bbb;
+      padding: 1.5mm 2mm;
+      font-size: 7.5pt;
+      line-height: 1.2;
+      display: flex; flex-direction: column;
+      gap: 0.5mm;
+      overflow: hidden;
+      background: white;
+    }
+    .print-day.empty { border-color: #eee; background: #fafafa; }
+    .print-day .dnum {
+      font-weight: 700; font-size: 10pt;
+    }
+    .print-day .dtag { font-size: 6.5pt; color: #555; }
+    .print-day .pses {
+      font-size: 7pt; line-height: 1.2;
+    }
+    .print-day .pses.lift { font-weight: 600; }
+    .print-day .pses.rest { font-style: italic; color: #777; }
+  }
+
+  /* Mini setup banner */
+  .setup-banner {
+    background: linear-gradient(135deg, rgba(255, 107, 53, 0.18), rgba(255, 107, 53, 0.05));
+    border: 1px solid var(--accent-dim);
+    border-radius: 14px; padding: 14px;
+    margin-bottom: 14px;
+  }
+  .setup-banner h3 { color: var(--accent); }
+  .setup-banner p { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+
+  /* Modal */
+  .modal-bg {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex; align-items: flex-end; justify-content: center;
+  }
+  .modal {
+    width: 100%; max-width: 480px;
+    background: var(--surface);
+    border-radius: 18px 18px 0 0;
+    padding: 16px;
+    max-height: 80vh; overflow-y: auto;
+    border-top: 1px solid var(--border);
+  }
+  .modal h2 { margin-bottom: 12px; }
+  .modal .close-btn {
+    position: absolute; top: 16px; right: 16px;
+    width: 32px; height: 32px;
+    border-radius: 10px; background: var(--surface-2);
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  details.section { margin-bottom: 14px; }
+  details.section summary {
+    cursor: pointer; padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    font-weight: 600;
+    list-style: none;
+  }
+  details.section summary::-webkit-details-marker { display: none; }
+  details.section summary::after {
+    content: '▾'; float: right; color: var(--dim); transition: transform 0.15s;
+  }
+  details.section[open] summary::after { transform: rotate(180deg); }
+  details.section .section-body { padding: 12px 4px; }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: calc(80px + var(--safe-bottom));
+    left: 50%; transform: translateX(-50%);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 10px 18px;
+    border-radius: 12px;
+    font-size: 13px;
+    z-index: 200;
+    opacity: 0;
+    transition: opacity 0.18s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header class="topbar" id="topbar"></header>
+<main id="app"></main>
+
+<nav class="tabs">
+  <button data-view="today" class="active">
+    <span class="icon">●</span><span>Today</span>
+  </button>
+  <button data-view="stats">
+    <span class="icon">▲</span><span>Stats</span>
+  </button>
+  <button data-view="calendar">
+    <span class="icon">▦</span><span>Calendar</span>
+  </button>
+  <button data-view="settings">
+    <span class="icon">⚙</span><span>Settings</span>
+  </button>
+</nav>
+
+<div id="modal-root"></div>
+<div id="toast" class="toast"></div>
+<div id="print-root" class="print-root"></div>
+
+<script>
+"use strict";
+
+// ------------------------------------------------------------------
+// CONSTANTS
+// ------------------------------------------------------------------
+
+const STORAGE_KEY = "recompTracker.v1";
+const SCHEMA_VERSION = 1;
+
+const DEFAULT_META = {
+  startDate: "2026-06-22",
+  startWeightKg: 79.0,
+  targetWeightKg: 69.0,
+  targetDate: "2027-06-21",
+  ageBracket: "30-39",
+  lastBackupAt: null,
+  rosterAnchor: "2026-06-22",  // The Monday of cycle position "night-2"
+  setupComplete: false
+};
+
+// 6-week cycle starting from rosterAnchor: night-2, post-nights, day, day, day, night-1, then repeat
+const WEEK_CYCLE = ["night", "post-nights", "day", "day", "day", "night"];
+
+// Phases — weeks 1-16 Cut, 17-32 Fitness, 33-52 Training
+const PHASES = [
+  { id: 1, name: "Cut",      startWeek: 1,  endWeek: 16, mesoCount: 4 },
+  { id: 2, name: "Fitness",  startWeek: 17, endWeek: 32, mesoCount: 4 },
+  { id: 3, name: "Training", startWeek: 33, endWeek: 52, mesoCount: 5 }
+];
+
+// Each mesocycle = 4 weeks: build, build+, push, deload
+// Rep ranges and RPE adjust per phase.
+const PHASE_PRESCRIPTION = {
+  1: {  // CUT
+    mainLift:      { repsLow: 8,  repsHigh: 10, sets: 4, baseRpe: 7 },
+    secondaryLift: { repsLow: 8,  repsHigh: 12, sets: 3, baseRpe: 7 },
+    accessory:     { repsLow: 10, repsHigh: 15, sets: 3, baseRpe: 7 },
+    longRun:       { distanceKm: 6, type: "easy" },
+    easyRun:       { durationMin: 30 },
+    qualityRun:    null,
+    swim:          { distanceKm: 1, type: "easy" }
+  },
+  2: {  // FITNESS
+    mainLift:      { repsLow: 5,  repsHigh: 8,  sets: 4, baseRpe: 8 },
+    secondaryLift: { repsLow: 6,  repsHigh: 10, sets: 3, baseRpe: 7 },
+    accessory:     { repsLow: 8,  repsHigh: 12, sets: 3, baseRpe: 7 },
+    longRun:       { distanceKm: 10, type: "progressive" },
+    easyRun:       { durationMin: 35 },
+    qualityRun:    { type: "tempo", durationMin: 20, note: "20 min @ comfortably hard (~HM pace)" },
+    swim:          { distanceKm: 1, type: "easy" }
+  },
+  3: {  // TRAINING
+    mainLift:      { repsLow: 3,  repsHigh: 6,  sets: 4, baseRpe: 8 },
+    secondaryLift: { repsLow: 5,  repsHigh: 8,  sets: 3, baseRpe: 8 },
+    accessory:     { repsLow: 8,  repsHigh: 12, sets: 3, baseRpe: 7 },
+    longRun:       { distanceKm: 13, type: "polarized" },
+    easyRun:       { durationMin: 40 },
+    qualityRun:    { type: "intervals", durationMin: 30, note: "5 × 3 min @ 10k pace, 2 min jog recovery" },
+    swim:          { distanceKm: 1, type: "easy" }
+  }
+};
+
+// Lift session templates
+const LIFT_TEMPLATES = {
+  "lower-a": {
+    name: "Lower A",
+    short: "Lower A",
+    exercises: [
+      { name: "Back Squat",        role: "mainLift",      key: "back-squat" },
+      { name: "Romanian Deadlift", role: "secondaryLift", key: "rdl" },
+      { name: "Walking Lunges",    role: "accessory",     key: "walking-lunges" },
+      { name: "Plank",             role: "accessory",     key: "plank", unit: "seconds" }
+    ]
+  },
+  "upper-a": {
+    name: "Upper A",
+    short: "Upper A",
+    exercises: [
+      { name: "Bench Press",       role: "mainLift",      key: "bench-press" },
+      { name: "Barbell Row",       role: "secondaryLift", key: "barbell-row" },
+      { name: "DB Overhead Press", role: "accessory",     key: "db-ohp" },
+      { name: "Face Pulls",        role: "accessory",     key: "face-pulls" }
+    ]
+  },
+  "lower-b": {
+    name: "Lower B",
+    short: "Lower B",
+    exercises: [
+      { name: "Conventional Deadlift", role: "mainLift",      key: "deadlift" },
+      { name: "Bulgarian Split Squat", role: "secondaryLift", key: "bss" },
+      { name: "Hip Thrust",            role: "accessory",     key: "hip-thrust" },
+      { name: "Hanging Knee Raise",    role: "accessory",     key: "hkr" }
+    ]
+  },
+  "upper-b": {
+    name: "Upper B",
+    short: "Upper B",
+    exercises: [
+      { name: "Overhead Press",     role: "mainLift",      key: "ohp" },
+      { name: "Pull-Up (assist OK)",role: "secondaryLift", key: "pullup" },
+      { name: "Incline DB Press",   role: "accessory",     key: "incline-db" },
+      { name: "Curl + Pushdown SS", role: "accessory",     key: "curl-pushdown" }
+    ]
+  }
+};
+
+// Weekly day templates — keyed by week type
+// Each day has a list of sessions: { slot: 'AM'|'PM', type: 'lift'|'run'|'swim'|'rest', key: ... }
+const DAY_TEMPLATES = {
+  day: { // standard day-shift week
+    Mon: [ { slot: "AM", type: "lift", key: "lower-a" } ],
+    Tue: [ { slot: "AM", type: "lift", key: "upper-a" },
+           { slot: "PM", type: "run",  variant: "long" } ],
+    Wed: [ { slot: "PM", type: "run",  variant: "easy" } ],
+    Thu: [ { slot: "PM", type: "lift", key: "lower-b" } ],
+    Fri: [ { slot: "PM", type: "lift", key: "upper-b" },
+           { slot: "PM", type: "swim" } ],
+    Sat: [ { slot: "AM", type: "run",  variant: "saturday" } ],  // resolves to easy/quality per phase
+    Sun: [ { slot: "—",  type: "rest" } ]
+  },
+  night: { // working night shifts Wed-Sun, train late PM before shift
+    Mon: [ { slot: "AM", type: "lift", key: "lower-a", intensityMod: 0 } ],
+    Tue: [ { slot: "AM", type: "lift", key: "upper-a" },
+           { slot: "PM", type: "run",  variant: "long", forceEasy: true } ],
+    Wed: [ { slot: "PM", type: "run",  variant: "easy" } ],
+    Thu: [ { slot: "PM", type: "lift", key: "lower-b", intensityMod: -1 } ],
+    Fri: [ { slot: "PM", type: "lift", key: "upper-b", intensityMod: -1 } ],
+    Sat: [ { slot: "PM", type: "swim" } ],
+    Sun: [ { slot: "—",  type: "rest" } ]
+  },
+  "post-nights": { // Mon = post-nights crash; shift sessions
+    Mon: [ { slot: "PM", type: "run", variant: "easy", short: true } ],
+    Tue: [ { slot: "AM", type: "lift", key: "lower-a" } ],
+    Wed: [ { slot: "AM", type: "lift", key: "upper-a" },
+           { slot: "PM", type: "run",  variant: "long", forceEasy: true } ],
+    Thu: [ { slot: "PM", type: "run",  variant: "easy" } ],
+    Fri: [ { slot: "PM", type: "lift", key: "lower-b" } ],
+    Sat: [ { slot: "AM", type: "lift", key: "upper-b" },
+           { slot: "PM", type: "swim" } ],
+    Sun: [ { slot: "—",  type: "rest" } ]
+  }
+};
+
+// ------------------------------------------------------------------
+// DATE HELPERS
+// ------------------------------------------------------------------
+
+function pad(n) { return n < 10 ? "0" + n : "" + n; }
+
+function isoDate(d) {
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+
+function parseISO(s) {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function todayISO() { return isoDate(new Date()); }
+
+function addDays(iso, n) {
+  const d = parseISO(iso);
+  d.setDate(d.getDate() + n);
+  return isoDate(d);
+}
+
+function daysBetween(a, b) {
+  return Math.floor((parseISO(b) - parseISO(a)) / 86400000);
+}
+
+function dayOfWeekName(iso) {
+  const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return names[parseISO(iso).getDay()];
+}
+
+function fullDayName(iso) {
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  return names[parseISO(iso).getDay()];
+}
+
+function mondayOf(iso) {
+  const d = parseISO(iso);
+  const dow = d.getDay();
+  const diff = dow === 0 ? -6 : 1 - dow;
+  d.setDate(d.getDate() + diff);
+  return isoDate(d);
+}
+
+function formatPrettyDate(iso) {
+  const d = parseISO(iso);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${dayOfWeekName(iso)} ${d.getDate()} ${months[d.getMonth()]}`;
+}
+
+function monthLabel(year, monthZeroIdx) {
+  const months = ["January", "February", "March", "April", "May", "June",
+                  "July", "August", "September", "October", "November", "December"];
+  return `${months[monthZeroIdx]} ${year}`;
+}
+
+// ------------------------------------------------------------------
+// PROGRAM CALCULATION
+// ------------------------------------------------------------------
+
+function weekNumberFor(iso, meta) {
+  const startMon = mondayOf(meta.startDate);
+  const thisMon = mondayOf(iso);
+  const weeks = Math.floor(daysBetween(startMon, thisMon) / 7);
+  return weeks + 1; // 1-indexed
+}
+
+function getPhase(weekNum) {
+  if (weekNum < 1) return null;
+  for (const p of PHASES) {
+    if (weekNum >= p.startWeek && weekNum <= p.endWeek) return p;
+  }
+  return PHASES[PHASES.length - 1]; // post-program — stay on Phase 3
+}
+
+function getMesoInfo(weekNum, phase) {
+  const phaseWeek = weekNum - phase.startWeek + 1;
+  const meso = Math.floor((phaseWeek - 1) / 4) + 1;
+  const weekInMeso = ((phaseWeek - 1) % 4) + 1;
+  const isDeload = weekInMeso === 4;
+  return { phaseWeek, meso, weekInMeso, isDeload };
+}
+
+function getWeekType(iso, meta) {
+  // Override from shiftRoster if user has explicitly set this week
+  const data = loadData();
+  const monIso = mondayOf(iso);
+  if (data.shiftRoster && data.shiftRoster[monIso]) {
+    return data.shiftRoster[monIso];
+  }
+  // Default cycle starting from rosterAnchor
+  const anchorMon = mondayOf(meta.rosterAnchor || meta.startDate);
+  const weeksFromAnchor = Math.floor(daysBetween(anchorMon, monIso) / 7);
+  const pos = ((weeksFromAnchor % 6) + 6) % 6;
+  return WEEK_CYCLE[pos];
+}
+
+// Suggested reps for the week within mesocycle (build → push → deload)
+function repsForWeekInMeso(weekInMeso, repsLow, repsHigh) {
+  if (weekInMeso === 4) return repsLow; // deload — top of light
+  // Week 1: bottom of range, Week 2: middle, Week 3: top
+  const span = repsHigh - repsLow;
+  if (weekInMeso === 1) return repsLow;
+  if (weekInMeso === 2) return Math.round(repsLow + span * 0.5);
+  return repsHigh;
+}
+
+function rpeForWeekInMeso(weekInMeso, baseRpe) {
+  if (weekInMeso === 4) return Math.max(5, baseRpe - 2); // deload
+  if (weekInMeso === 1) return baseRpe - 0.5;
+  if (weekInMeso === 2) return baseRpe;
+  return Math.min(9.5, baseRpe + 0.5); // push week
+}
+
+function setsForWeekInMeso(weekInMeso, baseSets) {
+  if (weekInMeso === 4) return Math.max(2, Math.ceil(baseSets / 2)); // deload halves sets
+  return baseSets;
+}
+
+// Get prescribed sessions for a given date
+function getPrescriptionForDate(iso, meta) {
+  const weekNum = weekNumberFor(iso, meta);
+  if (weekNum < 1) return { sessions: [], phase: null, meso: null, weekType: null, weekNum: 0 };
+
+  const phase = getPhase(weekNum);
+  const mesoInfo = getMesoInfo(weekNum, phase);
+  const weekType = getWeekType(iso, meta);
+  const dow = dayOfWeekName(iso);
+  const dayTemplate = DAY_TEMPLATES[weekType][dow] || [];
+  const rx = PHASE_PRESCRIPTION[phase.id];
+
+  const sessions = dayTemplate.map((s, idx) => {
+    const sess = {
+      id: `${dow}-${idx}-${s.type}-${s.key || s.variant || "x"}`,
+      type: s.type, slot: s.slot
+    };
+    if (s.type === "lift") {
+      const tmpl = LIFT_TEMPLATES[s.key];
+      sess.name = tmpl.name;
+      sess.key = s.key;
+      sess.intensityMod = s.intensityMod || 0;
+      sess.exercises = tmpl.exercises.map(ex => {
+        const role = rx[ex.role];
+        const sets = setsForWeekInMeso(mesoInfo.weekInMeso, role.sets);
+        const reps = repsForWeekInMeso(mesoInfo.weekInMeso, role.repsLow, role.repsHigh);
+        const rpe = rpeForWeekInMeso(mesoInfo.weekInMeso, role.baseRpe) + (s.intensityMod || 0);
+        return {
+          name: ex.name,
+          key: ex.key,
+          role: ex.role,
+          unit: ex.unit || "kg",
+          sets, reps, rpe,
+          repsRange: `${role.repsLow}-${role.repsHigh}`
+        };
+      });
+    } else if (s.type === "run") {
+      const variant = s.variant;
+      if (variant === "long") {
+        const long = rx.longRun;
+        const forceEasy = s.forceEasy || mesoInfo.isDeload;
+        sess.name = "Long Run";
+        sess.cardio = {
+          variant: "long",
+          distanceKm: mesoInfo.isDeload ? Math.round(long.distanceKm * 0.7) : long.distanceKm,
+          targetType: forceEasy ? "easy" : long.type,
+          note: forceEasy ? "All Z2 / conversational" :
+                long.type === "progressive" ? "Easy start, last 20% at goal pace" :
+                long.type === "polarized" ? "Last 20% at goal HM pace" : "Z2 / conversational"
+        };
+      } else if (variant === "saturday") {
+        // Phase-dependent: easy in P1, quality in P2-3
+        if (rx.qualityRun) {
+          sess.name = "Quality Run";
+          sess.cardio = {
+            variant: "quality",
+            durationMin: rx.qualityRun.durationMin,
+            targetType: rx.qualityRun.type,
+            note: rx.qualityRun.note
+          };
+        } else {
+          sess.name = "Easy Run";
+          sess.cardio = {
+            variant: "easy",
+            durationMin: rx.easyRun.durationMin,
+            targetType: "easy",
+            note: "Z2 / conversational"
+          };
+        }
+      } else if (variant === "easy") {
+        const short = s.short;
+        sess.name = short ? "Easy Run (short)" : "Easy Run";
+        sess.cardio = {
+          variant: "easy",
+          durationMin: short ? 20 : rx.easyRun.durationMin,
+          targetType: "easy",
+          note: "Z2 / conversational"
+        };
+      }
+    } else if (s.type === "swim") {
+      sess.name = "Swim";
+      sess.cardio = {
+        variant: "swim",
+        distanceKm: rx.swim.distanceKm,
+        targetType: "easy",
+        note: "Easy aerobic"
+      };
+    } else if (s.type === "rest") {
+      sess.name = "Rest Day";
+    }
+    return sess;
+  });
+
+  return { sessions, phase, meso: mesoInfo, weekType, weekNum };
+}
+
+// ------------------------------------------------------------------
+// STORAGE
+// ------------------------------------------------------------------
+
+let _cachedData = null;
+
+function loadData() {
+  if (_cachedData) return _cachedData;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      _cachedData = JSON.parse(raw);
+      _cachedData.meta = Object.assign({}, DEFAULT_META, _cachedData.meta || {});
+      _cachedData.days = _cachedData.days || {};
+      _cachedData.shiftRoster = _cachedData.shiftRoster || {};
+      _cachedData.schemaVersion = SCHEMA_VERSION;
+      return _cachedData;
+    }
+  } catch (e) {
+    console.error("Failed to parse stored data", e);
+  }
+  _cachedData = {
+    schemaVersion: SCHEMA_VERSION,
+    meta: Object.assign({}, DEFAULT_META),
+    shiftRoster: {},
+    days: {}
+  };
+  return _cachedData;
+}
+
+function saveData() {
+  if (!_cachedData) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(_cachedData));
+  } catch (e) {
+    showToast("⚠ Save failed — storage full?");
+    console.error(e);
+  }
+}
+
+function getDay(iso) {
+  const data = loadData();
+  if (!data.days[iso]) {
+    data.days[iso] = {
+      date: iso,
+      weightKg: null,
+      activeCaloriesKcal: null,
+      dayComplete: false,
+      dayNotes: "",
+      sessions: {}
+    };
+  }
+  return data.days[iso];
+}
+
+function getSessionLog(iso, sessionId) {
+  const day = getDay(iso);
+  if (!day.sessions[sessionId]) {
+    day.sessions[sessionId] = {
+      completed: false,
+      notes: "",
+      exercises: {},
+      actualDurationMin: null,
+      actualDistanceKm: null,
+      actualHrAvg: null
+    };
+  }
+  return day.sessions[sessionId];
+}
+
+function getExerciseLog(iso, sessionId, exerciseKey) {
+  const sess = getSessionLog(iso, sessionId);
+  if (!sess.exercises[exerciseKey]) {
+    sess.exercises[exerciseKey] = {
+      setsLogged: [],
+      completed: false,
+      notes: ""
+    };
+  }
+  return sess.exercises[exerciseKey];
+}
+
+// ------------------------------------------------------------------
+// SUGGESTED WEIGHT (double-progression based on recent history)
+// ------------------------------------------------------------------
+
+function findLastLoggedExercise(exerciseKey, beforeIso, maxLookbackDays = 60) {
+  const data = loadData();
+  const dates = Object.keys(data.days).sort().reverse();
+  for (const iso of dates) {
+    if (iso >= beforeIso) continue;
+    if (daysBetween(iso, beforeIso) > maxLookbackDays) break;
+    const day = data.days[iso];
+    for (const sid in day.sessions) {
+      const sess = day.sessions[sid];
+      if (sess.exercises && sess.exercises[exerciseKey]) {
+        const ex = sess.exercises[exerciseKey];
+        if (ex.setsLogged && ex.setsLogged.length) {
+          return { iso, sessionId: sid, ex };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function suggestWeight(exerciseKey, targetReps, targetRpe, role, iso) {
+  const prev = findLastLoggedExercise(exerciseKey, iso);
+  if (!prev) return null;
+  const sets = prev.ex.setsLogged.filter(s => s.weightKg != null);
+  if (!sets.length) return null;
+  // Use the heaviest top-set weight from last session as baseline
+  const maxWt = Math.max(...sets.map(s => s.weightKg));
+  // Check if last session hit top of range at target RPE
+  const topReps = Math.max(...sets.filter(s => s.weightKg === maxWt).map(s => s.reps || 0));
+  const topRpe  = Math.min(...sets.filter(s => s.weightKg === maxWt && s.rpe).map(s => s.rpe));
+  // Increment if user hit top reps at <= target RPE
+  let inc = 0;
+  if (topReps >= targetReps && (!topRpe || topRpe <= targetRpe)) {
+    // Lower-body lifts add more; upper less
+    const isLower = ["back-squat", "rdl", "deadlift", "bss", "hip-thrust", "walking-lunges"].includes(exerciseKey);
+    inc = isLower ? 2.5 : (role === "mainLift" ? 2.5 : 1.25);
+  }
+  return Math.round((maxWt + inc) * 4) / 4; // round to nearest 0.25
+}
+
+// ------------------------------------------------------------------
+// ROLLING METRICS
+// ------------------------------------------------------------------
+
+function rollingAvg(series, windowDays) {
+  // series: [{date, value}] sorted ascending. Returns same array with .avg added.
+  return series.map((pt, i) => {
+    const cutoff = addDays(pt.date, -windowDays + 1);
+    const window = series.filter(p => p.date >= cutoff && p.date <= pt.date && p.value != null);
+    if (!window.length) return Object.assign({}, pt, { avg: null });
+    const avg = window.reduce((s, p) => s + p.value, 0) / window.length;
+    return Object.assign({}, pt, { avg });
+  });
+}
+
+function weightSeries() {
+  const data = loadData();
+  return Object.values(data.days)
+    .filter(d => d.weightKg != null)
+    .map(d => ({ date: d.date, value: d.weightKg }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function caloriesSeries() {
+  const data = loadData();
+  return Object.values(data.days)
+    .filter(d => d.activeCaloriesKcal != null)
+    .map(d => ({ date: d.date, value: d.activeCaloriesKcal }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function currentRollingWeight() {
+  const series = rollingAvg(weightSeries(), 7);
+  if (!series.length) return null;
+  return series[series.length - 1].avg;
+}
+
+function paceAnalysis() {
+  const data = loadData();
+  const meta = data.meta;
+  const series = rollingAvg(weightSeries(), 7);
+  if (series.length < 2) return null;
+  const todayIso = todayISO();
+  const remainingDays = Math.max(1, daysBetween(todayIso, meta.targetDate));
+  const remainingWeeks = remainingDays / 7;
+  const currentWt = series[series.length - 1].avg;
+  const remainingKg = currentWt - meta.targetWeightKg;
+  const requiredRate = remainingKg / remainingWeeks;
+  // Actual rate over last ~28 days
+  const recent = series.filter(p => daysBetween(p.date, todayIso) <= 28);
+  let actualRate = null;
+  if (recent.length >= 2) {
+    const first = recent[0];
+    const last = recent[recent.length - 1];
+    const days = daysBetween(first.date, last.date);
+    if (days > 0) actualRate = (first.avg - last.avg) / days * 7; // kg/week (positive = losing)
+  }
+  return { currentWt, remainingKg, remainingWeeks, requiredRate, actualRate };
+}
+
+function adherence(daysBack) {
+  const data = loadData();
+  const todayIso = todayISO();
+  const start = addDays(todayIso, -daysBack + 1);
+  let prescribed = 0, completed = 0;
+  for (let i = 0; i < daysBack; i++) {
+    const iso = addDays(start, i);
+    if (iso > todayIso) break;
+    const rx = getPrescriptionForDate(iso, data.meta);
+    const day = data.days[iso];
+    for (const s of rx.sessions) {
+      if (s.type === "rest") continue;
+      prescribed++;
+      if (day && day.sessions[s.id] && day.sessions[s.id].completed) completed++;
+    }
+  }
+  if (!prescribed) return null;
+  return Math.round((completed / prescribed) * 100);
+}
+
+// ------------------------------------------------------------------
+// STATE + ROUTING
+// ------------------------------------------------------------------
+
+let state = {
+  view: "today",
+  currentDate: todayISO(),
+  openSessions: {},
+  calendarMonth: (function() {
+    const d = new Date();
+    return { y: d.getFullYear(), m: d.getMonth() };
+  })()
+};
+
+function setView(v) {
+  state.view = v;
+  document.querySelectorAll("nav.tabs button").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.view === v);
+  });
+  render();
+}
+
+function setDate(iso) {
+  state.currentDate = iso;
+  render();
+}
+
+// ------------------------------------------------------------------
+// TOAST
+// ------------------------------------------------------------------
+
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 1800);
+}
+
+// ------------------------------------------------------------------
+// RENDERING — TOPBAR
+// ------------------------------------------------------------------
+
+function renderTopbar() {
+  const tb = document.getElementById("topbar");
+  if (state.view === "calendar" || state.view === "settings" || state.view === "stats") {
+    tb.innerHTML = `
+      <div class="top-row">
+        <div style="flex:1">
+          <h1>${state.view === "calendar" ? "Calendar" : state.view === "settings" ? "Settings" : "Stats"}</h1>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  // Today view
+  const data = loadData();
+  const iso = state.currentDate;
+  const rx = getPrescriptionForDate(iso, data.meta);
+  const isToday = iso === todayISO();
+  tb.innerHTML = `
+    <div class="top-row">
+      <button class="nav-btn" data-action="prev-day">‹</button>
+      <div class="date-block">
+        <div class="date">${isToday ? "Today" : formatPrettyDate(iso)}</div>
+        <div class="sub">${isToday ? formatPrettyDate(iso) : ""}</div>
+      </div>
+      <button class="nav-btn" data-action="next-day">›</button>
+    </div>
+    <div class="phase-row">
+      ${rx.phase ? `<span class="pill phase-${rx.phase.id}">P${rx.phase.id} ${rx.phase.name}</span>` : ""}
+      ${rx.weekNum > 0 ? `<span class="pill">Wk ${rx.weekNum}/52</span>` : ""}
+      ${rx.meso ? `<span class="pill">Meso ${rx.meso.meso} · Wk ${rx.meso.weekInMeso}/4</span>` : ""}
+      ${rx.meso && rx.meso.isDeload ? `<span class="pill deload">Deload</span>` : ""}
+      ${rx.weekType ? `<span class="pill ${rx.weekType}">${rx.weekType === "post-nights" ? "Post-Nights" : rx.weekType === "night" ? "Night Shifts" : "Day Shifts"}</span>` : ""}
+    </div>
+  `;
+  tb.querySelector('[data-action="prev-day"]').onclick = () => setDate(addDays(iso, -1));
+  tb.querySelector('[data-action="next-day"]').onclick = () => setDate(addDays(iso, 1));
+}
+
+// ------------------------------------------------------------------
+// RENDERING — TODAY VIEW
+// ------------------------------------------------------------------
+
+function renderToday() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const iso = state.currentDate;
+  const rx = getPrescriptionForDate(iso, data.meta);
+  const day = data.days[iso] || null;
+
+  if (rx.weekNum <= 0) {
+    app.innerHTML = `
+      <div class="card">
+        <h2>Pre-Program</h2>
+        <p class="muted" style="margin: 8px 0 0;">
+          Your program begins ${formatPrettyDate(data.meta.startDate)}.
+          Use this time to lock in your starting weight.
+        </p>
+      </div>
+      ${renderQuickEntryCard(iso, day)}
+    `;
+    wireQuickEntry(iso);
+    return;
+  }
+
+  let html = "";
+
+  // Setup banner if first run
+  if (!data.meta.setupComplete) {
+    html += `
+      <div class="setup-banner">
+        <h3>Welcome — quick setup</h3>
+        <p>Defaults are pre-filled with your stated values: 79kg → 69kg over 12 months. Head to Settings to confirm or adjust before starting. Once you log your first day, this banner disappears.</p>
+      </div>
+    `;
+  }
+
+  // Quick entry
+  html += renderQuickEntryCard(iso, day);
+
+  // Sessions
+  html += `<div style="margin-top: 6px;"></div>`;
+  for (const s of rx.sessions) {
+    html += renderSessionCard(iso, s);
+  }
+
+  // Day complete button + notes
+  const allDone = rx.sessions.filter(s => s.type !== "rest").every(s => {
+    const sl = day && day.sessions[s.id];
+    return sl && sl.completed;
+  });
+  const isDayComplete = day && day.dayComplete;
+  html += `
+    <div class="card">
+      <label class="muted" style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;">Day notes</label>
+      <textarea class="notes-input" data-action="day-notes" placeholder="How did the day feel?">${(day && day.dayNotes) || ""}</textarea>
+      <button class="day-complete-btn ${isDayComplete ? "on" : ""}" data-action="toggle-day" ${(!allDone && !isDayComplete) ? "disabled" : ""}>
+        ${isDayComplete ? "✓ Day Complete" : allDone ? "Mark Day Complete" : "Tick all sessions first"}
+      </button>
+    </div>
+  `;
+
+  app.innerHTML = html;
+  wireToday(iso);
+}
+
+function renderQuickEntryCard(iso, day) {
+  const wt = day && day.weightKg != null ? day.weightKg : "";
+  const cal = day && day.activeCaloriesKcal != null ? day.activeCaloriesKcal : "";
+  return `
+    <div class="card">
+      <div class="quick-entry">
+        <div class="field">
+          <label>Weigh-in</label>
+          <input type="number" inputmode="decimal" step="0.1" min="40" max="200"
+                 data-action="set-weight" value="${wt}" placeholder="—">
+          <div class="unit">kg (AM, post-toilet)</div>
+        </div>
+        <div class="field">
+          <label>Active calories</label>
+          <input type="number" inputmode="numeric" step="1" min="0" max="3000"
+                 data-action="set-calories" value="${cal}" placeholder="—">
+          <div class="unit">kcal (from Garmin)</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSessionCard(iso, s) {
+  const sl = getSessionLog(iso, s.id);
+  const completed = sl.completed;
+
+  if (s.type === "rest") {
+    return `
+      <div class="session-card" data-type="rest" data-session-id="${s.id}">
+        <div class="session-head">
+          <div class="session-head-body">
+            <div class="session-tag">Rest</div>
+            <div class="name">Full Rest Day</div>
+            <div class="meta">No training. Sleep, eat, walk. Non-negotiable.</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  let body = "";
+  if (s.type === "lift") {
+    body += renderLiftBody(iso, s);
+  } else if (s.type === "run" || s.type === "swim") {
+    body += renderCardioBody(iso, s);
+  }
+  body += `
+    <textarea class="notes-input" data-action="session-notes" data-session-id="${s.id}" placeholder="Session notes">${sl.notes || ""}</textarea>
+  `;
+
+  const meta = describeSession(s);
+
+  return `
+    <div class="session-card ${completed ? "completed" : ""}" data-type="${s.type}" data-session-id="${s.id}">
+      <div class="session-head" data-action="toggle-session-body">
+        <div class="session-head-body">
+          <div class="session-tag">${s.slot} · ${s.type.toUpperCase()}</div>
+          <div class="name">${s.name}</div>
+          <div class="meta">${meta}</div>
+        </div>
+        <div class="session-check ${completed ? "on" : ""}" data-action="toggle-session-complete">
+          ${completed ? "✓" : ""}
+        </div>
+      </div>
+      <div class="session-body ${state.openSessions[s.id] ? "" : "collapsed"}">${body}</div>
+    </div>
+  `;
+}
+
+function describeSession(s) {
+  if (s.type === "lift") {
+    return s.exercises.map(e => e.name).join(" · ");
+  }
+  if (s.type === "run") {
+    const c = s.cardio;
+    if (c.variant === "long")    return `${c.distanceKm}km · ${c.note}`;
+    if (c.variant === "quality") return `${c.durationMin}min · ${c.note}`;
+    if (c.variant === "easy")    return `${c.durationMin}min · ${c.note}`;
+  }
+  if (s.type === "swim") {
+    return `${s.cardio.distanceKm}km · ${s.cardio.note}`;
+  }
+  return "";
+}
+
+function renderLiftBody(iso, s) {
+  let html = "";
+  for (const ex of s.exercises) {
+    const log = getExerciseLog(iso, s.id, ex.key);
+    const suggested = suggestWeight(ex.key, ex.reps, ex.rpe, ex.role, iso);
+    const targetLabel = ex.unit === "seconds"
+      ? `${ex.sets} × ${ex.reps}s`
+      : `${ex.sets} × ${ex.reps} reps @ RPE ${ex.rpe.toFixed(1).replace(/\.0$/, "")}`;
+
+    html += `
+      <div class="exercise" data-exercise-key="${ex.key}" data-session-id="${s.id}">
+        <div class="exercise-head">
+          <div class="exercise-name">${ex.name}</div>
+          <div class="exercise-target">${targetLabel}</div>
+        </div>
+        ${ex.unit !== "seconds" && suggested ? `<div class="suggested">Suggested: ${suggested}kg</div>` : ""}
+        <div class="set-row header">
+          <span>#</span><span>Reps</span><span>${ex.unit === "seconds" ? "Sec" : "kg"}</span><span>RPE</span><span></span>
+        </div>
+    `;
+    for (let i = 0; i < ex.sets; i++) {
+      const set = (log.setsLogged && log.setsLogged[i]) || {};
+      html += `
+        <div class="set-row" data-set-idx="${i}">
+          <div class="set-num">${i + 1}</div>
+          <input type="number" inputmode="numeric" step="1" min="0" max="999"
+                 data-field="reps" value="${set.reps != null ? set.reps : ""}" placeholder="${ex.reps}">
+          <input type="number" inputmode="decimal" step="0.25" min="0" max="500"
+                 data-field="weightKg" value="${set.weightKg != null ? set.weightKg : ""}" placeholder="${suggested || "—"}">
+          <input type="number" inputmode="decimal" step="0.5" min="1" max="10"
+                 data-field="rpe" value="${set.rpe != null ? set.rpe : ""}" placeholder="${ex.rpe}">
+          <div class="set-check ${set.completed ? "on" : ""}" data-action="toggle-set">${set.completed ? "✓" : ""}</div>
+        </div>
+      `;
+    }
+    html += `</div>`;
+  }
+  return html;
+}
+
+function renderCardioBody(iso, s) {
+  const log = getSessionLog(iso, s.id);
+  const c = s.cardio;
+  return `
+    <div style="padding-top: 12px;">
+      <div style="font-size: 13px; color: var(--muted); margin-bottom: 10px;">
+        Target: ${c.note}
+        ${c.distanceKm ? ` · ~${c.distanceKm}km` : ""}
+        ${c.durationMin ? ` · ~${c.durationMin}min` : ""}
+      </div>
+      <div class="cardio-log">
+        <div class="field">
+          <label>Distance (km)</label>
+          <input type="number" inputmode="decimal" step="0.1" min="0" max="50"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualDistanceKm"
+                 value="${log.actualDistanceKm != null ? log.actualDistanceKm : ""}" placeholder="${c.distanceKm || ""}">
+        </div>
+        <div class="field">
+          <label>Time (min)</label>
+          <input type="number" inputmode="numeric" step="1" min="0" max="300"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualDurationMin"
+                 value="${log.actualDurationMin != null ? log.actualDurationMin : ""}" placeholder="${c.durationMin || ""}">
+        </div>
+        <div class="field">
+          <label>Avg HR</label>
+          <input type="number" inputmode="numeric" step="1" min="40" max="220"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualHrAvg"
+                 value="${log.actualHrAvg != null ? log.actualHrAvg : ""}" placeholder="—">
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function wireQuickEntry(iso) {
+  const wEl = document.querySelector('[data-action="set-weight"]');
+  if (wEl) wEl.addEventListener("change", e => {
+    const day = getDay(iso);
+    const v = parseFloat(e.target.value);
+    day.weightKg = Number.isFinite(v) ? v : null;
+    saveData();
+  });
+  const cEl = document.querySelector('[data-action="set-calories"]');
+  if (cEl) cEl.addEventListener("change", e => {
+    const day = getDay(iso);
+    const v = parseInt(e.target.value, 10);
+    day.activeCaloriesKcal = Number.isFinite(v) ? v : null;
+    saveData();
+  });
+}
+
+function wireToday(iso) {
+  wireQuickEntry(iso);
+
+  // Toggle session body
+  document.querySelectorAll('[data-action="toggle-session-body"]').forEach(el => {
+    el.addEventListener("click", e => {
+      if (e.target.closest('[data-action="toggle-session-complete"]')) return;
+      const card = el.closest(".session-card");
+      const sid = card.dataset.sessionId;
+      const body = card.querySelector(".session-body");
+      const willOpen = body.classList.contains("collapsed");
+      body.classList.toggle("collapsed");
+      state.openSessions[sid] = willOpen;
+    });
+  });
+
+  // Toggle session complete (in-place — don't lose open panels or scroll)
+  document.querySelectorAll('[data-action="toggle-session-complete"]').forEach(el => {
+    el.addEventListener("click", e => {
+      e.stopPropagation();
+      const card = el.closest(".session-card");
+      const sid = card.dataset.sessionId;
+      const sl = getSessionLog(iso, sid);
+      sl.completed = !sl.completed;
+      saveData();
+      el.classList.toggle("on", sl.completed);
+      el.textContent = sl.completed ? "✓" : "";
+      card.classList.toggle("completed", sl.completed);
+      refreshDayCompleteButton(iso);
+    });
+  });
+
+  // Session notes
+  document.querySelectorAll('[data-action="session-notes"]').forEach(el => {
+    el.addEventListener("change", e => {
+      const sid = e.target.dataset.sessionId;
+      const sl = getSessionLog(iso, sid);
+      sl.notes = e.target.value;
+      saveData();
+    });
+  });
+
+  // Set inputs
+  document.querySelectorAll(".set-row[data-set-idx]").forEach(row => {
+    const idx = parseInt(row.dataset.setIdx, 10);
+    const exEl = row.closest(".exercise");
+    const sid = exEl.dataset.sessionId;
+    const exKey = exEl.dataset.exerciseKey;
+    row.querySelectorAll("input").forEach(inp => {
+      inp.addEventListener("change", () => {
+        const log = getExerciseLog(iso, sid, exKey);
+        if (!log.setsLogged[idx]) log.setsLogged[idx] = {};
+        const field = inp.dataset.field;
+        const val = inp.value === "" ? null : parseFloat(inp.value);
+        log.setsLogged[idx][field] = Number.isFinite(val) ? val : null;
+        saveData();
+      });
+    });
+    const chk = row.querySelector('[data-action="toggle-set"]');
+    chk.addEventListener("click", () => {
+      const log = getExerciseLog(iso, sid, exKey);
+      if (!log.setsLogged[idx]) log.setsLogged[idx] = {};
+      log.setsLogged[idx].completed = !log.setsLogged[idx].completed;
+      saveData();
+      chk.classList.toggle("on", log.setsLogged[idx].completed);
+      chk.textContent = log.setsLogged[idx].completed ? "✓" : "";
+    });
+  });
+
+  // Cardio
+  document.querySelectorAll('[data-action="set-cardio"]').forEach(inp => {
+    inp.addEventListener("change", () => {
+      const sid = inp.dataset.sessionId;
+      const field = inp.dataset.field;
+      const sl = getSessionLog(iso, sid);
+      const val = inp.value === "" ? null : parseFloat(inp.value);
+      sl[field] = Number.isFinite(val) ? val : null;
+      saveData();
+    });
+  });
+
+  // Day notes + complete
+  const dn = document.querySelector('[data-action="day-notes"]');
+  if (dn) dn.addEventListener("change", e => {
+    const day = getDay(iso);
+    day.dayNotes = e.target.value;
+    saveData();
+  });
+  const dc = document.querySelector('[data-action="toggle-day"]');
+  if (dc) dc.addEventListener("click", () => {
+    const day = getDay(iso);
+    day.dayComplete = !day.dayComplete;
+    const data = loadData();
+    if (day.dayComplete && !data.meta.setupComplete) {
+      data.meta.setupComplete = true;
+    }
+    saveData();
+    refreshDayCompleteButton(iso);
+  });
+}
+
+function refreshDayCompleteButton(iso) {
+  const data = loadData();
+  const rx = getPrescriptionForDate(iso, data.meta);
+  const day = data.days[iso] || null;
+  const allDone = rx.sessions.filter(s => s.type !== "rest").every(s => {
+    const sl = day && day.sessions[s.id];
+    return sl && sl.completed;
+  });
+  const isDayComplete = day && day.dayComplete;
+  const btn = document.querySelector('[data-action="toggle-day"]');
+  if (!btn) return;
+  btn.classList.toggle("on", isDayComplete);
+  btn.disabled = !allDone && !isDayComplete;
+  btn.textContent = isDayComplete ? "✓ Day Complete" : (allDone ? "Mark Day Complete" : "Tick all sessions first");
+}
+
+// ------------------------------------------------------------------
+// RENDERING — STATS VIEW (charts + headline numbers)
+// ------------------------------------------------------------------
+
+function renderStats() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const meta = data.meta;
+  const pace = paceAnalysis();
+  const adh7  = adherence(7);
+  const adh28 = adherence(28);
+  const wtSeries = weightSeries();
+  const lastWt = wtSeries.length ? wtSeries[wtSeries.length - 1].value : null;
+  const rolling = currentRollingWeight();
+
+  let paceCard = "";
+  if (pace) {
+    const need = pace.requiredRate;
+    const got  = pace.actualRate;
+    const onTrack = got != null && got >= need * 0.85;
+    const paceCls = got == null ? "" : (onTrack ? "delta-good" : (got >= need * 0.5 ? "delta-warn" : "delta-bad"));
+    paceCard = `
+      <div class="card">
+        <h2>Pace check</h2>
+        <div class="stat-grid" style="margin-top: 10px;">
+          <div class="stat-tile">
+            <div class="label">Current (7-day avg)</div>
+            <div class="value">${pace.currentWt.toFixed(2)}<span style="font-size: 14px; color: var(--muted)"> kg</span></div>
+            <div class="sub">${pace.remainingKg.toFixed(2)} kg to go · ${Math.round(pace.remainingWeeks)} wk left</div>
+          </div>
+          <div class="stat-tile ${paceCls}">
+            <div class="label">Last 28 days</div>
+            <div class="value">${got != null ? (got >= 0 ? "−" : "+") + Math.abs(got).toFixed(2) : "—"}<span style="font-size: 14px; color: var(--muted)"> kg/wk</span></div>
+            <div class="sub">Required: ${need >= 0 ? "−" : "+"}${Math.abs(need).toFixed(2)} kg/wk</div>
+          </div>
+        </div>
+        <p style="font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5;">
+          ${got == null ? "Log at least 2 weigh-ins separated by a few days to compute pace." :
+            onTrack ? "✓ On track. Maintain current deficit." :
+            got >= need * 0.5 ? "⚠ Slightly behind required pace. Consider small deficit increase or check food logging accuracy." :
+            "⚠ Significantly off pace. Audit intake and energy expenditure assumptions."}
+        </p>
+      </div>
+    `;
+  }
+
+  const adhCard = `
+    <div class="stat-grid">
+      <div class="stat-tile">
+        <div class="label">Last 7 days</div>
+        <div class="value">${adh7 != null ? adh7 + "%" : "—"}</div>
+        <div class="sub">Session adherence</div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Last 28 days</div>
+        <div class="value">${adh28 != null ? adh28 + "%" : "—"}</div>
+        <div class="sub">Session adherence</div>
+      </div>
+    </div>
+  `;
+
+  app.innerHTML = `
+    ${adhCard}
+    ${paceCard}
+    <div class="chart-wrap">
+      <h3>Weight trajectory</h3>
+      <div class="legend">
+        <span class="key"><span class="swatch" style="background:#ff6b35"></span>Target line</span>
+        <span class="key"><span class="swatch" style="background:#60a5fa"></span>7-day avg</span>
+        <span class="key"><span class="swatch" style="background:#a0a0a0; height: 4px; border-radius: 50%"></span>Daily</span>
+      </div>
+      ${renderWeightChart()}
+    </div>
+    <div class="chart-wrap">
+      <h3>Active calories</h3>
+      <div class="legend">
+        <span class="key"><span class="swatch" style="background:#a78bfa; height: 8px"></span>Daily</span>
+        <span class="key"><span class="swatch" style="background:#facc15"></span>7-day avg</span>
+      </div>
+      ${renderCaloriesChart()}
+    </div>
+  `;
+}
+
+function renderWeightChart() {
+  const data = loadData();
+  const meta = data.meta;
+  const series = rollingAvg(weightSeries(), 7);
+  const startIso = meta.startDate;
+  const endIso = meta.targetDate;
+  const days = daysBetween(startIso, endIso);
+
+  // Chart dims
+  const W = 360, H = 220;
+  const pad = { top: 12, right: 12, bottom: 28, left: 36 };
+  const innerW = W - pad.left - pad.right;
+  const innerH = H - pad.top - pad.bottom;
+
+  // Y scale: pad around target & start
+  const yMin = Math.min(meta.targetWeightKg - 1.5, ...series.map(p => p.value));
+  const yMax = Math.max(meta.startWeightKg + 1.5, ...series.map(p => p.value));
+  const yPad = 0.5;
+  const ymin = Math.floor((yMin - yPad) * 2) / 2;
+  const ymax = Math.ceil((yMax + yPad) * 2) / 2;
+
+  const xForIso = iso => pad.left + (daysBetween(startIso, iso) / days) * innerW;
+  const yForVal = v => pad.top + innerH - ((v - ymin) / (ymax - ymin)) * innerH;
+
+  // Target trajectory line (start to target)
+  const x1 = xForIso(startIso), y1 = yForVal(meta.startWeightKg);
+  const x2 = xForIso(endIso),   y2 = yForVal(meta.targetWeightKg);
+
+  // Grid lines (every 1kg)
+  let grid = "";
+  for (let v = Math.ceil(ymin); v <= Math.floor(ymax); v++) {
+    const y = yForVal(v);
+    grid += `<line x1="${pad.left}" y1="${y}" x2="${W - pad.right}" y2="${y}" stroke="#2a2a2a" stroke-width="0.5"/>`;
+    grid += `<text x="${pad.left - 6}" y="${y + 4}" font-size="9" fill="#707070" text-anchor="end">${v}</text>`;
+  }
+
+  // X labels (months)
+  let xLabels = "";
+  let cur = parseISO(startIso);
+  cur.setDate(1);
+  if (cur < parseISO(startIso)) cur.setMonth(cur.getMonth() + 1);
+  while (isoDate(cur) <= endIso) {
+    const x = xForIso(isoDate(cur));
+    if (x > pad.left && x < W - pad.right) {
+      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      xLabels += `<text x="${x}" y="${H - 10}" font-size="9" fill="#707070" text-anchor="middle">${months[cur.getMonth()]}</text>`;
+      xLabels += `<line x1="${x}" y1="${pad.top}" x2="${x}" y2="${H - pad.bottom}" stroke="#1f1f1f" stroke-width="0.5"/>`;
+    }
+    cur.setMonth(cur.getMonth() + 1);
+  }
+
+  // Target line
+  const targetLine = `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#ff6b35" stroke-width="2" stroke-dasharray="4 3" opacity="0.7"/>`;
+
+  // Raw points
+  let pts = "";
+  series.forEach(p => {
+    const cx = xForIso(p.date), cy = yForVal(p.value);
+    pts += `<circle cx="${cx}" cy="${cy}" r="2" fill="#a0a0a0" opacity="0.8"/>`;
+  });
+
+  // Rolling avg line
+  let avgPath = "";
+  series.filter(p => p.avg != null).forEach((p, i) => {
+    const cx = xForIso(p.date), cy = yForVal(p.avg);
+    avgPath += (i === 0 ? "M" : "L") + cx + "," + cy;
+  });
+
+  // Today marker
+  const todayIso = todayISO();
+  let todayMarker = "";
+  if (todayIso >= startIso && todayIso <= endIso) {
+    const tx = xForIso(todayIso);
+    todayMarker = `<line x1="${tx}" y1="${pad.top}" x2="${tx}" y2="${H - pad.bottom}" stroke="#ff6b35" stroke-width="1" opacity="0.3"/>`;
+  }
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      ${grid}${xLabels}${todayMarker}${targetLine}
+      ${avgPath ? `<path d="${avgPath}" stroke="#60a5fa" stroke-width="2" fill="none"/>` : ""}
+      ${pts}
+    </svg>
+  `;
+}
+
+function renderCaloriesChart() {
+  const data = loadData();
+  const meta = data.meta;
+  const series = rollingAvg(caloriesSeries(), 7);
+  const startIso = meta.startDate;
+  const endIso = meta.targetDate;
+  const days = daysBetween(startIso, endIso);
+
+  const W = 360, H = 200;
+  const pad = { top: 10, right: 12, bottom: 28, left: 36 };
+  const innerW = W - pad.left - pad.right;
+  const innerH = H - pad.top - pad.bottom;
+
+  if (!series.length) {
+    return `
+      <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+        <text x="${W/2}" y="${H/2}" font-size="12" fill="#707070" text-anchor="middle">No active calories logged yet</text>
+      </svg>
+    `;
+  }
+
+  const ymax = Math.max(800, ...series.map(p => p.value)) * 1.1;
+
+  const xForIso = iso => pad.left + (daysBetween(startIso, iso) / days) * innerW;
+  const yForVal = v => pad.top + innerH - (v / ymax) * innerH;
+
+  // Y labels
+  let grid = "";
+  for (let v = 0; v <= ymax; v += 200) {
+    const y = yForVal(v);
+    grid += `<line x1="${pad.left}" y1="${y}" x2="${W - pad.right}" y2="${y}" stroke="#2a2a2a" stroke-width="0.5"/>`;
+    grid += `<text x="${pad.left - 4}" y="${y + 4}" font-size="9" fill="#707070" text-anchor="end">${v}</text>`;
+  }
+
+  // Bars
+  let bars = "";
+  const barW = Math.max(1.5, innerW / days * 0.7);
+  series.forEach(p => {
+    const cx = xForIso(p.date);
+    const cy = yForVal(p.value);
+    bars += `<rect x="${cx - barW/2}" y="${cy}" width="${barW}" height="${H - pad.bottom - cy}" fill="#a78bfa" opacity="0.6"/>`;
+  });
+
+  // Rolling avg
+  let avgPath = "";
+  series.filter(p => p.avg != null).forEach((p, i) => {
+    const cx = xForIso(p.date), cy = yForVal(p.avg);
+    avgPath += (i === 0 ? "M" : "L") + cx + "," + cy;
+  });
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      ${grid}
+      ${bars}
+      ${avgPath ? `<path d="${avgPath}" stroke="#facc15" stroke-width="2" fill="none"/>` : ""}
+    </svg>
+  `;
+}
+
+// ------------------------------------------------------------------
+// RENDERING — CALENDAR VIEW
+// ------------------------------------------------------------------
+
+function renderCalendar() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const { y, m } = state.calendarMonth;
+  const monthName = monthLabel(y, m);
+
+  app.innerHTML = `
+    <div class="cal-controls">
+      <button class="month-nav" data-action="prev-month">‹</button>
+      <div class="month-label">${monthName}</div>
+      <button class="month-nav" data-action="next-month">›</button>
+      <button class="print-btn" data-action="print-calendar">PRINT PDF</button>
+    </div>
+    <div class="cal-grid">
+      ${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => `<div class="dow">${d}</div>`).join("")}
+      ${buildMonthGrid(y, m)}
+    </div>
+    <div style="font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5;">
+      Tap any day to view or edit. Print PDF opens the browser print dialog — choose <strong>Save as PDF</strong>, page size <strong>A4 landscape</strong>, to get one month per sheet.
+    </div>
+  `;
+
+  app.querySelector('[data-action="prev-month"]').onclick = () => {
+    if (state.calendarMonth.m === 0) { state.calendarMonth.y--; state.calendarMonth.m = 11; }
+    else state.calendarMonth.m--;
+    render();
+  };
+  app.querySelector('[data-action="next-month"]').onclick = () => {
+    if (state.calendarMonth.m === 11) { state.calendarMonth.y++; state.calendarMonth.m = 0; }
+    else state.calendarMonth.m++;
+    render();
+  };
+  app.querySelector('[data-action="print-calendar"]').onclick = () => openPrintDialog();
+  app.querySelectorAll(".cal-day[data-date]").forEach(el => {
+    el.addEventListener("click", () => {
+      setDate(el.dataset.date);
+      setView("today");
+    });
+  });
+}
+
+function buildMonthGrid(y, m) {
+  const first = new Date(y, m, 1);
+  const dow = first.getDay();
+  const offset = dow === 0 ? 6 : dow - 1; // Monday start
+  const last = new Date(y, m + 1, 0).getDate();
+  const data = loadData();
+  const todayIso = todayISO();
+  let html = "";
+
+  for (let i = 0; i < offset; i++) {
+    html += `<div class="cal-day empty"></div>`;
+  }
+  for (let d = 1; d <= last; d++) {
+    const iso = `${y}-${pad(m+1)}-${pad(d)}`;
+    const rx = getPrescriptionForDate(iso, data.meta);
+    const day = data.days[iso] || null;
+    const completed = day && day.dayComplete;
+    const isToday = iso === todayIso;
+    let ses = "";
+    for (const s of rx.sessions) {
+      if (s.type === "rest") { ses += `<div class="ses rest">Rest</div>`; continue; }
+      const cls = s.type === "lift" ? "lift" : (s.type === "run" || s.type === "swim" ? "run" : "");
+      ses += `<div class="ses ${cls}">${s.name}</div>`;
+    }
+    const wt = day && day.weightKg != null ? `<div class="wt-pill">${day.weightKg.toFixed(1)}kg</div>` : "";
+    html += `
+      <div class="cal-day ${isToday ? "today" : ""} ${completed ? "completed" : ""}" data-date="${iso}">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <span class="dnum">${d}</span>
+          ${rx.meso && rx.meso.isDeload ? `<span style="font-size: 8px; color: var(--warn)">DEL</span>` : ""}
+        </div>
+        ${ses}
+        ${wt}
+      </div>
+    `;
+  }
+  return html;
+}
+
+// ------------------------------------------------------------------
+// PRINT — A4 LANDSCAPE CALENDAR
+// ------------------------------------------------------------------
+
+function openPrintDialog() {
+  const root = document.getElementById("print-root");
+  root.innerHTML = buildPrintCalendar();
+  // Allow layout to flush before invoking print
+  setTimeout(() => window.print(), 60);
+}
+
+function buildPrintCalendar() {
+  const data = loadData();
+  const start = parseISO(data.meta.startDate);
+  const end = parseISO(data.meta.targetDate);
+  // Generate from current calendar month minus 1 month to 12 months ahead by default
+  // Actually use program start month → program end month
+  const startY = start.getFullYear(), startM = start.getMonth();
+  const endY = end.getFullYear(), endM = end.getMonth();
+  let y = startY, m = startM;
+  let html = "";
+  while (y < endY || (y === endY && m <= endM)) {
+    html += buildPrintMonth(y, m);
+    m++;
+    if (m > 11) { y++; m = 0; }
+  }
+  return html;
+}
+
+function buildPrintMonth(y, m) {
+  const data = loadData();
+  const monthName = monthLabel(y, m);
+  const first = new Date(y, m, 1);
+  const dow = first.getDay();
+  const offset = dow === 0 ? 6 : dow - 1;
+  const last = new Date(y, m + 1, 0).getDate();
+
+  let cells = "";
+  // DOW headers (within the grid)
+  ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].forEach(d => {
+    cells += `<div class="dow">${d}</div>`;
+  });
+
+  for (let i = 0; i < offset; i++) cells += `<div class="print-day empty"></div>`;
+
+  for (let d = 1; d <= last; d++) {
+    const iso = `${y}-${pad(m+1)}-${pad(d)}`;
+    const rx = getPrescriptionForDate(iso, data.meta);
+    let ses = "";
+    for (const s of rx.sessions) {
+      const cls = s.type === "lift" ? "lift" : (s.type === "rest" ? "rest" : "");
+      ses += `<div class="pses ${cls}">${s.name}</div>`;
+    }
+    let phaseTag = "";
+    if (rx.phase) {
+      phaseTag = `P${rx.phase.id}·M${rx.meso.meso}·W${rx.meso.weekInMeso}${rx.meso.isDeload ? " DELOAD" : ""}`;
+    }
+    cells += `
+      <div class="print-day">
+        <div class="dnum">${d}</div>
+        ${phaseTag ? `<div class="dtag">${phaseTag}</div>` : ""}
+        ${ses}
+      </div>
+    `;
+  }
+
+  // Trailing empties to complete grid (so all months have same height visually)
+  const totalCells = offset + last;
+  const trailing = (7 - (totalCells % 7)) % 7;
+  for (let i = 0; i < trailing; i++) cells += `<div class="print-day empty"></div>`;
+
+  // Determine grid row count
+  const rows = Math.ceil((offset + last) / 7) + 1; // +1 for DOW header row
+
+  return `
+    <div class="print-month">
+      <div class="print-header">
+        <h1>${monthName}</h1>
+        <div class="sub">Recomp program — ${data.meta.startWeightKg}kg → ${data.meta.targetWeightKg}kg · Phases: 1 Cut · 2 Fitness · 3 Training</div>
+      </div>
+      <div class="print-grid" style="grid-template-rows: 6mm repeat(${rows - 1}, 1fr);">
+        ${cells}
+      </div>
+    </div>
+  `;
+}
+
+// ------------------------------------------------------------------
+// RENDERING — SETTINGS VIEW
+// ------------------------------------------------------------------
+
+function renderSettings() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const meta = data.meta;
+
+  app.innerHTML = `
+    <details class="section" open>
+      <summary>Program basics</summary>
+      <div class="section-body">
+        <div class="card">
+          <div class="settings-row">
+            <div class="label">Start date<div class="desc">Day program begins</div></div>
+            <input type="date" data-setting="startDate" value="${meta.startDate}">
+          </div>
+          <div class="settings-row">
+            <div class="label">Target date<div class="desc">Goal endpoint</div></div>
+            <input type="date" data-setting="targetDate" value="${meta.targetDate}">
+          </div>
+          <div class="settings-row">
+            <div class="label">Start weight<div class="desc">kg</div></div>
+            <input type="number" step="0.1" data-setting="startWeightKg" value="${meta.startWeightKg}">
+          </div>
+          <div class="settings-row">
+            <div class="label">Target weight<div class="desc">kg</div></div>
+            <input type="number" step="0.1" data-setting="targetWeightKg" value="${meta.targetWeightKg}">
+          </div>
+          <div class="settings-row">
+            <div class="label">Roster anchor<div class="desc">Monday where cycle starts at "night-2"</div></div>
+            <input type="date" data-setting="rosterAnchor" value="${meta.rosterAnchor}">
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>Shift roster (next 12 weeks)</summary>
+      <div class="section-body">
+        <div style="font-size: 12px; color: var(--muted); margin-bottom: 8px; line-height: 1.5;">
+          Default cycle from roster anchor: <strong>night → night → post-nights → day → day → day</strong>, repeating every 6 weeks.
+          Tap a week to override.
+        </div>
+        <div class="roster-grid" id="roster-list"></div>
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>Data — backup & restore</summary>
+      <div class="section-body">
+        <p class="muted" style="font-size: 13px; margin: 0 0 12px;">
+          All data lives in this browser's localStorage. iOS may clear it if storage pressure is high — back up periodically.
+        </p>
+        <div class="btn-row">
+          <button class="btn primary" data-action="export-json">Export JSON</button>
+          <button class="btn" data-action="import-json">Import JSON</button>
+        </div>
+        <input type="file" id="import-file" accept=".json,application/json" style="display: none;">
+        <p class="muted" style="font-size: 11px; margin-top: 10px;">
+          Last backup: ${meta.lastBackupAt ? formatPrettyDate(meta.lastBackupAt.slice(0,10)) : "never"}
+        </p>
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>Danger zone</summary>
+      <div class="section-body">
+        <p class="muted" style="font-size: 13px; margin: 0 0 12px;">Wipe all data including logged days, weights, and overrides.</p>
+        <button class="btn danger" data-action="reset-all">Erase everything</button>
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>About this program</summary>
+      <div class="section-body">
+        <div style="font-size: 13px; color: var(--muted); line-height: 1.55;">
+          <p>4x lift (upper/lower split) + 3x run + 1x swim + 1x rest. 52 weeks across three phases:</p>
+          <ul style="padding-left: 18px; margin: 8px 0;">
+            <li><strong>Phase 1 Cut</strong> (wks 1-16): hypertrophy 8-12 reps, all easy runs, larger deficit.</li>
+            <li><strong>Phase 2 Fitness</strong> (wks 17-32): strength-hypertrophy 5-8 reps, add tempo runs, smaller deficit.</li>
+            <li><strong>Phase 3 Training</strong> (wks 33-52): strength 3-6 reps, polarized running, minimal deficit.</li>
+          </ul>
+          <p>Mesocycles of 4 weeks: build → build+ → push → deload. Hard sessions front-loaded to Mon/Tue (your days off). Night-shift weeks reduce intensity by ~10%. Post-nights Mondays move the heavy lift to Tuesday.</p>
+          <p>Sources: Helms, Muscle &amp; Strength Pyramid 3e (RPE-based progression); Wilson 2012 meta (concurrent training interference); Schumann 2022 (session order); Knufinke 2018 & Fullagar 2015 (sleep + performance); Seiler (polarized intensity).</p>
+        </div>
+      </div>
+    </details>
+  `;
+
+  // Wire settings
+  app.querySelectorAll('[data-setting]').forEach(inp => {
+    inp.addEventListener("change", e => {
+      const key = inp.dataset.setting;
+      let v = e.target.value;
+      if (["startWeightKg","targetWeightKg"].includes(key)) v = parseFloat(v);
+      meta[key] = v;
+      saveData();
+      render();
+    });
+  });
+
+  // Roster
+  renderRoster();
+
+  app.querySelector('[data-action="export-json"]').onclick = exportJson;
+  app.querySelector('[data-action="import-json"]').onclick = () => {
+    document.getElementById("import-file").click();
+  };
+  document.getElementById("import-file").onchange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => importJson(reader.result);
+    reader.readAsText(file);
+  };
+  app.querySelector('[data-action="reset-all"]').onclick = () => {
+    if (confirm("Erase ALL data? This cannot be undone.")) {
+      localStorage.removeItem(STORAGE_KEY);
+      _cachedData = null;
+      render();
+      showToast("All data erased");
+    }
+  };
+}
+
+function renderRoster() {
+  const list = document.getElementById("roster-list");
+  if (!list) return;
+  const data = loadData();
+  const startMon = mondayOf(todayISO());
+  let html = "";
+  for (let i = 0; i < 12; i++) {
+    const mon = addDays(startMon, i * 7);
+    const wt = getWeekType(mon, data.meta);
+    html += `
+      <div class="roster-row">
+        <span>${formatPrettyDate(mon).replace(/^\w+ /, "")}</span>
+        <select data-roster-week="${mon}">
+          <option value="day" ${wt === "day" ? "selected" : ""}>Day</option>
+          <option value="night" ${wt === "night" ? "selected" : ""}>Night</option>
+          <option value="post-nights" ${wt === "post-nights" ? "selected" : ""}>Post-N</option>
+        </select>
+      </div>
+    `;
+  }
+  list.innerHTML = html;
+  list.querySelectorAll('[data-roster-week]').forEach(sel => {
+    sel.addEventListener("change", () => {
+      const data = loadData();
+      const mon = sel.dataset.rosterWeek;
+      data.shiftRoster[mon] = sel.value;
+      saveData();
+      showToast(`Week of ${mon} set to ${sel.value}`);
+    });
+  });
+}
+
+function exportJson() {
+  const data = loadData();
+  data.meta.lastBackupAt = new Date().toISOString();
+  saveData();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `recomp-backup-${todayISO()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
+  showToast("Backup downloaded");
+}
+
+function importJson(jsonText) {
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed.meta || !parsed.days) throw new Error("Not a valid backup file");
+    if (!confirm("This will replace ALL current data. Continue?")) return;
+    _cachedData = parsed;
+    _cachedData.meta = Object.assign({}, DEFAULT_META, parsed.meta);
+    _cachedData.shiftRoster = parsed.shiftRoster || {};
+    _cachedData.days = parsed.days || {};
+    saveData();
+    render();
+    showToast("Backup restored");
+  } catch (e) {
+    showToast("⚠ Invalid backup file");
+    console.error(e);
+  }
+}
+
+// ------------------------------------------------------------------
+// MAIN RENDER
+// ------------------------------------------------------------------
+
+function render() {
+  renderTopbar();
+  if (state.view === "today") renderToday();
+  else if (state.view === "stats") renderStats();
+  else if (state.view === "calendar") renderCalendar();
+  else if (state.view === "settings") renderSettings();
+}
+
+// Wire tabs
+document.querySelectorAll("nav.tabs button").forEach(btn => {
+  btn.addEventListener("click", () => setView(btn.dataset.view));
+});
+
+// Initial render
+render();
+
+// Reload data when window regains focus (in case it was edited elsewhere — unlikely but defensive)
+window.addEventListener("pageshow", () => {
+  _cachedData = null;
+  render();
+});
+
+// Keyboard nav on desktop
+document.addEventListener("keydown", e => {
+  if (state.view !== "today") return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.key === "ArrowLeft") setDate(addDays(state.currentDate, -1));
+  if (e.key === "ArrowRight") setDate(addDays(state.currentDate, 1));
+});
+
+// Service worker — guarantees offline once first load completes.
+// Skipped on file:// (won't register) and on http (registration silently fails).
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(err => {
+      console.warn("SW registration failed:", err);
+    });
+  });
+}
+
+</script>
+</body>
+</html>
