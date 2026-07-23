@@ -254,19 +254,19 @@
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-top: 1px solid var(--border);
-    display: grid; grid-template-columns: repeat(4, 1fr);
-    padding: 8px 4px calc(8px + var(--safe-bottom));
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    padding: 8px 2px calc(8px + var(--safe-bottom));
     z-index: 20;
   }
   nav.tabs button {
-    display: flex; flex-direction: column; align-items: center; gap: 4px;
-    padding: 6px 4px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 6px 2px;
     color: var(--dim);
-    font-size: 10px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.04em;
+    font-size: 9.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.02em;
     border-radius: 10px;
   }
-  nav.tabs button .icon { font-size: 20px; }
+  nav.tabs button .icon { font-size: 19px; }
   nav.tabs button.active { color: var(--accent); }
 
   /* Stats view */
@@ -523,6 +523,171 @@
   details.section[open] summary::after { transform: rotate(180deg); }
   details.section .section-body { padding: 12px 4px; }
 
+  /* Nutrition view */
+  .kcal-total-card {
+    background: linear-gradient(135deg, rgba(255,107,53,0.10), rgba(96,165,250,0.06));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .kcal-total-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 12px;
+  }
+  .kcal-total {
+    font-size: 32px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .kcal-total .u { font-size: 14px; color: var(--muted); font-weight: 500; margin-left: 6px; }
+  .kcal-target { font-size: 13px; color: var(--muted); text-align: right; }
+  .kcal-target .n { font-size: 18px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+  .kcal-target.over .n { color: var(--danger); }
+  .kcal-bar-track {
+    height: 8px; background: var(--surface-2);
+    border-radius: 999px; overflow: hidden;
+    margin-top: 12px;
+  }
+  .kcal-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #60a5fa, #4ade80);
+    border-radius: 999px;
+    transition: width 0.25s ease;
+  }
+  .kcal-bar-fill.over { background: linear-gradient(90deg, #facc15, #f87171); }
+  .no-target-hint {
+    font-size: 12px; color: var(--muted);
+    margin-top: 8px;
+    line-height: 1.4;
+  }
+  .no-target-hint a { color: var(--accent); text-decoration: underline; cursor: pointer; }
+
+  .meal-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+  .meal-section-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 10px;
+  }
+  .meal-section-head h3 { font-size: 15px; font-weight: 700; }
+  .meal-section-head .sub {
+    font-size: 12px; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .meal-entries { display: flex; flex-direction: column; gap: 4px; }
+  .meal-entry {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border-radius: 10px;
+    font-size: 14px;
+    gap: 8px;
+    cursor: pointer;
+  }
+  .meal-entry:active { background: var(--border); }
+  .meal-entry .m-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meal-entry .m-kcal { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+  .meal-empty {
+    font-size: 12px; color: var(--dim);
+    text-align: center;
+    padding: 8px 0;
+  }
+  .meal-actions {
+    display: flex; gap: 8px; overflow-x: auto;
+    margin-top: 10px;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .meal-actions::-webkit-scrollbar { display: none; }
+  .meal-actions button {
+    flex-shrink: 0;
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  .meal-actions .add-btn {
+    background: var(--accent);
+    color: #0a0a0a;
+  }
+  .meal-actions .fav-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .meal-actions .fav-btn .fav-kcal {
+    color: var(--muted); font-size: 11px; margin-left: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .no-favs-hint {
+    font-size: 11px; color: var(--dim);
+    margin-top: 8px;
+    line-height: 1.4;
+  }
+  .manage-favs-row {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 10px;
+  }
+  .manage-favs-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  /* Meal / favorite modal form */
+  .form-row { margin-bottom: 10px; }
+  .form-row label {
+    display: block; font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px;
+  }
+  .form-row input, .form-row select { font-size: 15px; }
+  .form-checkbox {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border-radius: 10px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .form-checkbox input { width: 22px; height: 22px; margin: 0; }
+  .modal-btn-row {
+    display: flex; gap: 8px; margin-top: 14px;
+  }
+  .modal-btn-row .btn { flex: 1; }
+  .fav-list {
+    display: flex; flex-direction: column; gap: 6px;
+    margin-bottom: 14px;
+  }
+  .fav-list-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border-radius: 10px;
+    font-size: 14px;
+  }
+  .fav-list-row .fav-info { flex: 1; overflow: hidden; }
+  .fav-list-row .fav-info .n { font-weight: 600; }
+  .fav-list-row .fav-info .k { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .fav-list-row .del-btn {
+    color: var(--danger);
+    background: rgba(248,113,113,0.10);
+    border: 1px solid rgba(248,113,113,0.3);
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
   /* Toast */
   .toast {
     position: fixed;
@@ -549,6 +714,9 @@
 <nav class="tabs">
   <button data-view="today" class="active">
     <span class="icon">●</span><span>Today</span>
+  </button>
+  <button data-view="nutrition">
+    <span class="icon">◍</span><span>Food</span>
   </button>
   <button data-view="stats">
     <span class="icon">▲</span><span>Stats</span>
@@ -583,8 +751,15 @@ const DEFAULT_META = {
   ageBracket: "30-39",
   lastBackupAt: null,
   rosterAnchor: "2026-06-22",  // The Monday of cycle position "night-2"
-  setupComplete: false
+  setupComplete: false,
+  dailyCalorieTarget: null      // Optional daily kcal budget for the nutrition tab
 };
+
+const MEAL_SECTIONS = [
+  { key: "morning", label: "Morning" },
+  { key: "arvo",    label: "Arvo" },
+  { key: "dinner",  label: "Dinner" }
+];
 
 // 6-week cycle starting from rosterAnchor: night-2, post-nights, day, day, day, night-1, then repeat
 const WEEK_CYCLE = ["night", "post-nights", "day", "day", "day", "night"];
@@ -940,6 +1115,7 @@ function loadData() {
       _cachedData.meta = Object.assign({}, DEFAULT_META, _cachedData.meta || {});
       _cachedData.days = _cachedData.days || {};
       _cachedData.shiftRoster = _cachedData.shiftRoster || {};
+      _cachedData.favorites = _cachedData.favorites || [];
       _cachedData.schemaVersion = SCHEMA_VERSION;
       return _cachedData;
     }
@@ -950,9 +1126,80 @@ function loadData() {
     schemaVersion: SCHEMA_VERSION,
     meta: Object.assign({}, DEFAULT_META),
     shiftRoster: {},
+    favorites: [],
     days: {}
   };
   return _cachedData;
+}
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+function getMealsForDay(iso) {
+  const day = getDay(iso);
+  if (!day.meals) day.meals = { morning: [], arvo: [], dinner: [] };
+  for (const s of ["morning", "arvo", "dinner"]) {
+    if (!day.meals[s]) day.meals[s] = [];
+  }
+  return day.meals;
+}
+
+function addMealEntry(iso, section, entry) {
+  const meals = getMealsForDay(iso);
+  meals[section].push({ id: uid(), name: entry.name, kcal: entry.kcal });
+  saveData();
+}
+
+function updateMealEntry(iso, section, id, patch) {
+  const meals = getMealsForDay(iso);
+  const item = meals[section].find(e => e.id === id);
+  if (item) {
+    Object.assign(item, patch);
+    saveData();
+  }
+}
+
+function deleteMealEntry(iso, section, id) {
+  const meals = getMealsForDay(iso);
+  meals[section] = meals[section].filter(e => e.id !== id);
+  saveData();
+}
+
+function getFavorites() {
+  return loadData().favorites;
+}
+
+function addFavorite(entry) {
+  const data = loadData();
+  data.favorites.push({ id: uid(), name: entry.name, kcal: entry.kcal });
+  saveData();
+}
+
+function deleteFavorite(id) {
+  const data = loadData();
+  data.favorites = data.favorites.filter(f => f.id !== id);
+  saveData();
+}
+
+function updateFavorite(id, patch) {
+  const data = loadData();
+  const f = data.favorites.find(x => x.id === id);
+  if (f) { Object.assign(f, patch); saveData(); }
+}
+
+function dayTotalKcal(iso) {
+  const meals = getMealsForDay(iso);
+  let sum = 0;
+  for (const s of ["morning", "arvo", "dinner"]) {
+    for (const e of meals[s]) sum += (e.kcal || 0);
+  }
+  return sum;
+}
+
+function sectionTotalKcal(iso, section) {
+  const meals = getMealsForDay(iso);
+  return meals[section].reduce((s, e) => s + (e.kcal || 0), 0);
 }
 
 function saveData() {
@@ -1187,11 +1434,28 @@ function renderTopbar() {
     `;
     return;
   }
-  // Today view
+  // Today or Nutrition view — both use date navigation
   const data = loadData();
   const iso = state.currentDate;
-  const rx = getPrescriptionForDate(iso, data.meta);
   const isToday = iso === todayISO();
+
+  if (state.view === "nutrition") {
+    tb.innerHTML = `
+      <div class="top-row">
+        <button class="nav-btn" data-action="prev-day">‹</button>
+        <div class="date-block">
+          <div class="date">${isToday ? "Today · Food" : formatPrettyDate(iso)}</div>
+          <div class="sub">${isToday ? formatPrettyDate(iso) : "Food log"}</div>
+        </div>
+        <button class="nav-btn" data-action="next-day">›</button>
+      </div>
+    `;
+    tb.querySelector('[data-action="prev-day"]').onclick = () => setDate(addDays(iso, -1));
+    tb.querySelector('[data-action="next-day"]').onclick = () => setDate(addDays(iso, 1));
+    return;
+  }
+
+  const rx = getPrescriptionForDate(iso, data.meta);
   tb.innerHTML = `
     <div class="top-row">
       <button class="nav-btn" data-action="prev-day">‹</button>
@@ -1572,6 +1836,248 @@ function refreshDayCompleteButton(iso) {
   btn.classList.toggle("on", isDayComplete);
   btn.disabled = !allDone && !isDayComplete;
   btn.textContent = isDayComplete ? "✓ Day Complete" : (allDone ? "Mark Day Complete" : "Tick all sessions first");
+}
+
+// ------------------------------------------------------------------
+// MODAL HELPERS
+// ------------------------------------------------------------------
+
+function openModal(title, contentHtml, onOpen) {
+  const root = document.getElementById("modal-root");
+  root.innerHTML = `
+    <div class="modal-bg" data-action="modal-bg">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="close-btn" data-action="close-modal">✕</div>
+        <h2>${title}</h2>
+        ${contentHtml}
+      </div>
+    </div>
+  `;
+  root.querySelector('[data-action="modal-bg"]').addEventListener("click", closeModal);
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  if (onOpen) onOpen(root);
+}
+
+function closeModal() {
+  document.getElementById("modal-root").innerHTML = "";
+}
+
+// ------------------------------------------------------------------
+// RENDERING — NUTRITION VIEW
+// ------------------------------------------------------------------
+
+function renderNutrition() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const iso = state.currentDate;
+  const total = dayTotalKcal(iso);
+  const target = data.meta.dailyCalorieTarget;
+  const favorites = getFavorites();
+
+  let totalCard = "";
+  if (target != null && target > 0) {
+    const pct = Math.min(100, Math.round(total / target * 100));
+    const remaining = target - total;
+    const over = remaining < 0;
+    totalCard = `
+      <div class="kcal-total-card">
+        <div class="kcal-total-row">
+          <div class="kcal-total">${total}<span class="u">kcal</span></div>
+          <div class="kcal-target ${over ? "over" : ""}">
+            of <span class="n">${target}</span> target<br>
+            <span style="font-size: 12px;">${over ? Math.abs(remaining) + " over" : remaining + " left"}</span>
+          </div>
+        </div>
+        <div class="kcal-bar-track">
+          <div class="kcal-bar-fill ${over ? "over" : ""}" style="width: ${pct}%"></div>
+        </div>
+      </div>
+    `;
+  } else {
+    totalCard = `
+      <div class="kcal-total-card">
+        <div class="kcal-total-row">
+          <div class="kcal-total">${total}<span class="u">kcal today</span></div>
+        </div>
+        <div class="no-target-hint">
+          No daily target set. <a data-action="go-settings">Set one in Settings</a> to see remaining budget and a progress bar.
+        </div>
+      </div>
+    `;
+  }
+
+  const manageRow = `
+    <div class="manage-favs-row">
+      <div class="muted" style="font-size: 12px;">${favorites.length} saved favorite${favorites.length === 1 ? "" : "s"}</div>
+      <button class="manage-favs-btn" data-action="manage-favs">Manage favorites</button>
+    </div>
+  `;
+
+  let sectionsHtml = "";
+  for (const sec of MEAL_SECTIONS) {
+    const entries = getMealsForDay(iso)[sec.key];
+    const secTotal = sectionTotalKcal(iso, sec.key);
+    let entriesHtml = entries.length
+      ? entries.map(e => `
+          <div class="meal-entry" data-action="edit-entry" data-section="${sec.key}" data-entry-id="${e.id}">
+            <div class="m-name">${escapeHtml(e.name)}</div>
+            <div class="m-kcal">${e.kcal} kcal</div>
+          </div>
+        `).join("")
+      : `<div class="meal-empty">No entries yet</div>`;
+
+    const favsBtns = favorites.map(f => `
+      <button class="fav-btn" data-action="add-favorite" data-section="${sec.key}" data-fav-id="${f.id}">
+        ${escapeHtml(f.name)}<span class="fav-kcal">${f.kcal}</span>
+      </button>
+    `).join("");
+
+    sectionsHtml += `
+      <div class="meal-section">
+        <div class="meal-section-head">
+          <h3>${sec.label}</h3>
+          <div class="sub">${secTotal} kcal</div>
+        </div>
+        <div class="meal-entries">${entriesHtml}</div>
+        <div class="meal-actions">
+          <button class="add-btn" data-action="add-entry" data-section="${sec.key}">+ Add</button>
+          ${favsBtns}
+        </div>
+        ${!favorites.length ? `<div class="no-favs-hint">Tap <strong>Manage favorites</strong> above to save common foods (coffee, protein shake) as one-tap buttons here.</div>` : ""}
+      </div>
+    `;
+  }
+
+  app.innerHTML = totalCard + manageRow + sectionsHtml;
+
+  // Wire actions
+  app.querySelectorAll('[data-action="add-entry"]').forEach(btn => {
+    btn.addEventListener("click", () => openMealEntryModal(iso, btn.dataset.section, null));
+  });
+  app.querySelectorAll('[data-action="edit-entry"]').forEach(el => {
+    el.addEventListener("click", () => openMealEntryModal(iso, el.dataset.section, el.dataset.entryId));
+  });
+  app.querySelectorAll('[data-action="add-favorite"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const fav = getFavorites().find(f => f.id === btn.dataset.favId);
+      if (!fav) return;
+      addMealEntry(iso, btn.dataset.section, { name: fav.name, kcal: fav.kcal });
+      renderNutrition();
+      showToast(`${fav.name} added`);
+    });
+  });
+  const mf = app.querySelector('[data-action="manage-favs"]');
+  if (mf) mf.addEventListener("click", openFavoritesModal);
+  const gs = app.querySelector('[data-action="go-settings"]');
+  if (gs) gs.addEventListener("click", () => setView("settings"));
+}
+
+function escapeHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function openMealEntryModal(iso, section, editEntryId) {
+  const editing = editEntryId ? getMealsForDay(iso)[section].find(e => e.id === editEntryId) : null;
+  const secLabel = MEAL_SECTIONS.find(s => s.key === section).label;
+  const html = `
+    <div class="form-row">
+      <label>Food name</label>
+      <input type="text" id="meal-name" value="${editing ? escapeHtml(editing.name) : ""}" placeholder="e.g. Chicken salad" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label>Calories</label>
+      <input type="number" inputmode="numeric" step="1" min="0" max="5000"
+             id="meal-kcal" value="${editing ? editing.kcal : ""}" placeholder="kcal">
+    </div>
+    ${!editing ? `
+      <label class="form-checkbox" for="save-fav">
+        <input type="checkbox" id="save-fav">
+        <span>Also save as favorite</span>
+      </label>
+    ` : ""}
+    <div class="modal-btn-row">
+      ${editing ? `<button class="btn danger" data-action="delete-entry">Delete</button>` : ""}
+      <button class="btn primary" data-action="save-entry">${editing ? "Save" : "Add to " + secLabel}</button>
+    </div>
+  `;
+  openModal(editing ? `Edit — ${secLabel}` : `Add to ${secLabel}`, html, root => {
+    setTimeout(() => root.querySelector("#meal-name").focus(), 60);
+
+    root.querySelector('[data-action="save-entry"]').addEventListener("click", () => {
+      const name = root.querySelector("#meal-name").value.trim();
+      const kcal = parseInt(root.querySelector("#meal-kcal").value, 10);
+      if (!name) { showToast("Name required"); return; }
+      if (!Number.isFinite(kcal) || kcal < 0) { showToast("Enter calories"); return; }
+      if (editing) {
+        updateMealEntry(iso, section, editEntryId, { name, kcal });
+      } else {
+        addMealEntry(iso, section, { name, kcal });
+        const saveFav = root.querySelector("#save-fav");
+        if (saveFav && saveFav.checked) addFavorite({ name, kcal });
+      }
+      closeModal();
+      renderNutrition();
+    });
+
+    const delBtn = root.querySelector('[data-action="delete-entry"]');
+    if (delBtn) delBtn.addEventListener("click", () => {
+      deleteMealEntry(iso, section, editEntryId);
+      closeModal();
+      renderNutrition();
+    });
+  });
+}
+
+function openFavoritesModal() {
+  const favs = getFavorites();
+  const listHtml = favs.length ? favs.map(f => `
+    <div class="fav-list-row" data-fav-id="${f.id}">
+      <div class="fav-info">
+        <div class="n">${escapeHtml(f.name)}</div>
+        <div class="k">${f.kcal} kcal</div>
+      </div>
+      <button class="del-btn" data-action="del-fav" data-fav-id="${f.id}">Remove</button>
+    </div>
+  `).join("") : `<div class="muted" style="font-size: 13px; padding: 8px 0;">No favorites yet. Add one below.</div>`;
+
+  const html = `
+    <div class="fav-list">${listHtml}</div>
+    <div style="border-top: 1px solid var(--border); padding-top: 12px;">
+      <div class="form-row">
+        <label>New favorite name</label>
+        <input type="text" id="new-fav-name" placeholder="e.g. Morning coffee" autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label>Calories</label>
+        <input type="number" inputmode="numeric" step="1" min="0" max="5000"
+               id="new-fav-kcal" placeholder="kcal">
+      </div>
+      <div class="modal-btn-row">
+        <button class="btn primary" data-action="add-fav">Add favorite</button>
+      </div>
+    </div>
+  `;
+
+  openModal("Manage favorites", html, root => {
+    root.querySelectorAll('[data-action="del-fav"]').forEach(btn => {
+      btn.addEventListener("click", () => {
+        deleteFavorite(btn.dataset.favId);
+        openFavoritesModal();
+      });
+    });
+    root.querySelector('[data-action="add-fav"]').addEventListener("click", () => {
+      const name = root.querySelector("#new-fav-name").value.trim();
+      const kcal = parseInt(root.querySelector("#new-fav-kcal").value, 10);
+      if (!name) { showToast("Name required"); return; }
+      if (!Number.isFinite(kcal) || kcal < 0) { showToast("Enter calories"); return; }
+      addFavorite({ name, kcal });
+      openFavoritesModal();
+      renderNutrition();
+    });
+  });
 }
 
 // ------------------------------------------------------------------
@@ -2004,6 +2510,10 @@ function renderSettings() {
             <input type="number" step="0.1" data-setting="targetWeightKg" value="${meta.targetWeightKg}">
           </div>
           <div class="settings-row">
+            <div class="label">Daily calorie target<div class="desc">kcal — leave blank for none</div></div>
+            <input type="number" step="10" min="1000" max="5000" data-setting="dailyCalorieTarget" value="${meta.dailyCalorieTarget != null ? meta.dailyCalorieTarget : ""}" placeholder="—">
+          </div>
+          <div class="settings-row">
             <div class="label">Roster anchor<div class="desc">Monday where cycle starts at "night-2"</div></div>
             <input type="date" data-setting="rosterAnchor" value="${meta.rosterAnchor}">
           </div>
@@ -2070,6 +2580,10 @@ function renderSettings() {
       const key = inp.dataset.setting;
       let v = e.target.value;
       if (["startWeightKg","targetWeightKg"].includes(key)) v = parseFloat(v);
+      if (key === "dailyCalorieTarget") {
+        v = v === "" ? null : parseInt(v, 10);
+        if (v != null && !Number.isFinite(v)) v = null;
+      }
       meta[key] = v;
       saveData();
       render();
@@ -2175,6 +2689,7 @@ function importJson(jsonText) {
 function render() {
   renderTopbar();
   if (state.view === "today") renderToday();
+  else if (state.view === "nutrition") renderNutrition();
   else if (state.view === "stats") renderStats();
   else if (state.view === "calendar") renderCalendar();
   else if (state.view === "settings") renderSettings();
