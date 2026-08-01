@@ -254,19 +254,19 @@
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-top: 1px solid var(--border);
-    display: grid; grid-template-columns: repeat(5, 1fr);
-    padding: 8px 2px calc(8px + var(--safe-bottom));
+    display: grid; grid-template-columns: repeat(6, 1fr);
+    padding: 8px 1px calc(8px + var(--safe-bottom));
     z-index: 20;
   }
   nav.tabs button {
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
-    padding: 6px 2px;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 6px 1px;
     color: var(--dim);
-    font-size: 9.5px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.02em;
+    font-size: 8.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.01em;
     border-radius: 10px;
   }
-  nav.tabs button .icon { font-size: 19px; }
+  nav.tabs button .icon { font-size: 18px; }
   nav.tabs button.active { color: var(--accent); }
 
   /* Stats view */
@@ -523,6 +523,12 @@
   details.section[open] summary::after { transform: rotate(180deg); }
   details.section .section-body { padding: 12px 4px; }
 
+  /* Predictor view */
+  .pred-lines { display: flex; flex-direction: column; margin-top: 6px; gap: 2px; }
+  .pred-val   { font-size: 22px; font-weight: 700; color: var(--accent);  font-variant-numeric: tabular-nums; }
+  .actual-val { font-size: 22px; font-weight: 700; color: var(--aerobic); font-variant-numeric: tabular-nums; }
+  .pred-sub   { font-size: 11px; color: var(--muted); }
+
   /* Nutrition view */
   .kcal-total-card {
     background: linear-gradient(135deg, rgba(255,107,53,0.10), rgba(96,165,250,0.06));
@@ -718,6 +724,9 @@
   <button data-view="nutrition">
     <span class="icon">◍</span><span>Food</span>
   </button>
+  <button data-view="predictor">
+    <span class="icon">↘</span><span>Predict</span>
+  </button>
   <button data-view="stats">
     <span class="icon">▲</span><span>Stats</span>
   </button>
@@ -752,8 +761,19 @@ const DEFAULT_META = {
   lastBackupAt: null,
   rosterAnchor: "2026-06-22",  // The Monday of cycle position "night-2"
   setupComplete: false,
-  dailyCalorieTarget: null      // Optional daily kcal budget for the nutrition tab
+  dailyCalorieTarget: null,     // Optional daily kcal budget for the nutrition tab
+  age: null,                    // Exact years — required for BMR
+  heightCm: null,               // Required for BMR
+  sex: "male"                   // "male" | "female" — chooses BMR formula constant
 };
+
+// 7700 kcal/kg is the standard clinical estimate (Wishnofsky 1958), still used
+// in modern energy-balance models. It assumes a fixed energy density for weight
+// loss, which is an approximation — actual metabolic adaptation during a
+// sustained deficit means predicted loss will tend to run slightly ahead of
+// actual loss over long periods. This is exactly what the predicted-vs-actual
+// graph is designed to surface, so no correction is needed in the formula itself.
+const KCAL_PER_KG_FAT = 7700;
 
 const MEAL_SECTIONS = [
   { key: "morning", label: "Morning" },
@@ -1358,6 +1378,96 @@ function paceAnalysis() {
   return { currentWt, remainingKg, remainingWeeks, requiredRate, actualRate };
 }
 
+// Mifflin-St Jeor BMR — validated within ~10% of measured RMR for most healthy adults.
+// Recalculated per-day from the latest weigh-in on or before that date.
+function calculateBMR(weightKg, heightCm, age, sex) {
+  if (!Number.isFinite(weightKg) || !Number.isFinite(heightCm) || !Number.isFinite(age)) return null;
+  const base = 10 * weightKg + 6.25 * heightCm - 5 * age;
+  return sex === "female" ? base - 161 : base + 5;
+}
+
+function profileComplete() {
+  const m = loadData().meta;
+  return Number.isFinite(m.age) && Number.isFinite(m.heightCm) && (m.sex === "male" || m.sex === "female");
+}
+
+// Latest weight on or before iso — BMR should never use a stale profile weight.
+function latestWeightOnOrBefore(iso) {
+  const series = weightSeries();
+  let latest = null;
+  for (const p of series) {
+    if (p.date <= iso) latest = p.value;
+  }
+  return latest;
+}
+
+function bmrForDate(iso) {
+  const meta = loadData().meta;
+  if (!profileComplete()) return null;
+  const wt = latestWeightOnOrBefore(iso);
+  if (wt == null) return null;
+  return calculateBMR(wt, meta.heightCm, meta.age, meta.sex);
+}
+
+// Total calories out = BMR + active calories logged for that day.
+// Requires: profile complete, weigh-in on or before date, active calories logged for date.
+function dailyCalsOut(iso) {
+  const day = loadData().days[iso];
+  if (!day || day.activeCaloriesKcal == null) return null;
+  const bmr = bmrForDate(iso);
+  if (bmr == null) return null;
+  return bmr + day.activeCaloriesKcal;
+}
+
+// Daily deficit = cals out − cals in. Returns null if any input is missing —
+// callers prorate missing days rather than treating them as zero deficit.
+function dailyDeficit(iso) {
+  const day = loadData().days[iso];
+  if (!day) return null;
+  const out = dailyCalsOut(iso);
+  if (out == null) return null;
+  const meals = getMealsForDay(iso);
+  const anyMealLogged = meals.morning.length + meals.arvo.length + meals.dinner.length > 0;
+  if (!anyMealLogged) return null;
+  const calsIn = dayTotalKcal(iso);
+  return out - calsIn;
+}
+
+// Weekly deficit over the 7 days ending on endIso, prorated for incomplete days.
+// Returns { deficit, completeDays } or null when no days are complete.
+function weeklyDeficit(endIso) {
+  let sum = 0, complete = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = dailyDeficit(addDays(endIso, -i));
+    if (d != null) { sum += d; complete++; }
+  }
+  if (complete === 0) return null;
+  return { deficit: (sum / complete) * 7, completeDays: complete };
+}
+
+function predictedWeeklyLossKg(endIso) {
+  const w = weeklyDeficit(endIso);
+  if (w == null) return null;
+  return { kg: w.deficit / KCAL_PER_KG_FAT, completeDays: w.completeDays };
+}
+
+// Reuse the same rolling average the weight chart uses — no second smoothing method.
+function rolledAvgOnOrBefore(iso, rolledSeries) {
+  let latest = null;
+  for (const p of rolledSeries) {
+    if (p.date <= iso && p.avg != null) latest = p.avg;
+  }
+  return latest;
+}
+
+function actualWeeklyLossKg(endIso) {
+  const rolled = rollingAvg(weightSeries(), 7);
+  const thisWk = rolledAvgOnOrBefore(endIso, rolled);
+  const prevWk = rolledAvgOnOrBefore(addDays(endIso, -7), rolled);
+  if (thisWk == null || prevWk == null) return null;
+  return prevWk - thisWk;  // positive = weight decreased
+}
+
 function adherence(daysBack) {
   const data = loadData();
   const todayIso = todayISO();
@@ -1424,11 +1534,14 @@ function showToast(msg) {
 
 function renderTopbar() {
   const tb = document.getElementById("topbar");
-  if (state.view === "calendar" || state.view === "settings" || state.view === "stats") {
+  if (state.view === "calendar" || state.view === "settings" || state.view === "stats" || state.view === "predictor") {
+    const title = state.view === "calendar" ? "Calendar" :
+                  state.view === "settings" ? "Settings" :
+                  state.view === "predictor" ? "Predictor" : "Stats";
     tb.innerHTML = `
       <div class="top-row">
         <div style="flex:1">
-          <h1>${state.view === "calendar" ? "Calendar" : state.view === "settings" ? "Settings" : "Stats"}</h1>
+          <h1>${title}</h1>
         </div>
       </div>
     `;
@@ -2081,6 +2194,198 @@ function openFavoritesModal() {
 }
 
 // ------------------------------------------------------------------
+// RENDERING — PREDICTOR VIEW (predicted vs actual weekly loss)
+// ------------------------------------------------------------------
+
+function renderPredictor() {
+  const app = document.getElementById("app");
+
+  if (!profileComplete()) {
+    app.innerHTML = `
+      <div class="card">
+        <h2>Complete your profile</h2>
+        <p class="muted" style="font-size: 13px; margin-top: 8px; line-height: 1.55;">
+          Prediction needs three one-time inputs to compute BMR (Mifflin-St Jeor):
+        </p>
+        <ul class="muted" style="font-size: 13px; padding-left: 18px; margin: 8px 0 14px;">
+          <li>Age (years)</li>
+          <li>Height (cm)</li>
+          <li>Sex (for the BMR formula)</li>
+        </ul>
+        <button class="btn primary" data-action="go-settings" style="width: 100%;">Open Settings</button>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom: 8px;">What this tab does</h3>
+        <p class="muted" style="font-size: 12px; line-height: 1.55;">
+          Once profile is set, compares your <strong>predicted</strong> weekly weight loss
+          (from calorie deficit ÷ ${KCAL_PER_KG_FAT} kcal/kg) against your
+          <strong>actual</strong> weekly loss (change in 7-day rolling weight average).
+          Predicted tends to run slightly ahead of actual over long stretches — that's
+          metabolic adaptation, not a bug.
+        </p>
+      </div>
+    `;
+    const gs = app.querySelector('[data-action="go-settings"]');
+    if (gs) gs.addEventListener("click", () => setView("settings"));
+    return;
+  }
+
+  const todayIso = todayISO();
+  const pred = predictedWeeklyLossKg(todayIso);
+  const actual = actualWeeklyLossKg(todayIso);
+
+  const fmtKg = v => (v == null ? null : (v >= 0 ? "−" : "+") + Math.abs(v).toFixed(2) + " kg");
+  const predText = pred == null
+    ? `<span class="dim">insufficient data</span>`
+    : `<span class="pred-val">${fmtKg(pred.kg)}</span><span class="pred-sub">based on ${pred.completeDays}/7 complete days</span>`;
+  const actualText = actual == null
+    ? `<span class="dim">insufficient data</span><span class="pred-sub">need weigh-ins across two weeks</span>`
+    : `<span class="actual-val">${fmtKg(actual)}</span><span class="pred-sub">7-day avg vs prior 7-day avg</span>`;
+
+  const weeklyBmr = bmrForDate(todayIso);
+  const latestWt = latestWeightOnOrBefore(todayIso);
+
+  app.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-tile">
+        <div class="label">Predicted this week</div>
+        <div class="pred-lines">${predText}</div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Actual this week</div>
+        <div class="pred-lines">${actualText}</div>
+      </div>
+    </div>
+    <div class="card" style="padding: 12px 14px; margin-bottom: 14px;">
+      <div style="font-size: 12px; color: var(--muted); line-height: 1.5;">
+        BMR from latest weigh-in (${latestWt != null ? latestWt.toFixed(1) + "kg" : "no weight yet"}):
+        <strong style="color: var(--text);">${weeklyBmr != null ? Math.round(weeklyBmr) + " kcal/day" : "—"}</strong>.
+        Total cals out = BMR + Garmin active cals. Deficit = out − food intake.
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <h3>Predicted vs actual — weekly</h3>
+      <div class="legend">
+        <span class="key"><span class="swatch" style="background:#ff6b35"></span>Predicted (from deficit)</span>
+        <span class="key"><span class="swatch" style="background:#60a5fa"></span>Actual (from scale)</span>
+      </div>
+      ${renderPredictorChart()}
+      <p style="font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5;">
+        Weeks with no complete days (missing food or active-cal logs) don't plot a predicted point.
+        Weeks without two rolling averages don't plot an actual point.
+      </p>
+    </div>
+  `;
+}
+
+function renderPredictorChart() {
+  const data = loadData();
+  const meta = data.meta;
+  const startMon = mondayOf(meta.startDate);
+  const todayIso = todayISO();
+
+  // Build weekly points from program start through this week
+  const points = [];
+  let cursor = addDays(startMon, 6); // first "week ending Sunday"
+  while (cursor <= todayIso) {
+    const pred = predictedWeeklyLossKg(cursor);
+    const act = actualWeeklyLossKg(cursor);
+    points.push({
+      date: cursor,
+      predicted: pred ? pred.kg : null,
+      actual: act
+    });
+    cursor = addDays(cursor, 7);
+  }
+
+  const W = 360, H = 220;
+  const pad = { top: 16, right: 12, bottom: 30, left: 42 };
+  const innerW = W - pad.left - pad.right;
+  const innerH = H - pad.top - pad.bottom;
+
+  if (!points.length) {
+    return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      <text x="${W/2}" y="${H/2}" font-size="12" fill="#707070" text-anchor="middle">No weeks completed yet</text>
+    </svg>`;
+  }
+
+  // Y range: symmetric around 0, pad to cover both series
+  const values = [];
+  points.forEach(p => {
+    if (p.predicted != null) values.push(p.predicted);
+    if (p.actual != null) values.push(p.actual);
+  });
+  const absMax = values.length ? Math.max(0.4, ...values.map(v => Math.abs(v))) : 0.5;
+  const yPad = Math.max(0.15, absMax * 0.15);
+  const ymin = -(absMax + yPad);
+  const ymax = absMax + yPad;
+
+  const xFor = i => points.length === 1 ? pad.left + innerW / 2 : pad.left + (i / (points.length - 1)) * innerW;
+  const yFor = v => pad.top + innerH - ((v - ymin) / (ymax - ymin)) * innerH;
+
+  // Grid at 0, ±0.25, ±0.5, ±0.75, ±1.0 within range
+  let grid = "";
+  const step = absMax > 1 ? 0.5 : 0.25;
+  for (let v = Math.ceil(ymin / step) * step; v <= ymax; v += step) {
+    const rv = Math.round(v * 100) / 100;
+    const y = yFor(rv);
+    const isZero = Math.abs(rv) < 0.001;
+    grid += `<line x1="${pad.left}" y1="${y}" x2="${W - pad.right}" y2="${y}" stroke="${isZero ? "#4a4a4a" : "#2a2a2a"}" stroke-width="${isZero ? 1 : 0.5}"/>`;
+    const label = (rv > 0 ? "−" : rv < 0 ? "+" : "") + Math.abs(rv).toFixed(2);
+    grid += `<text x="${pad.left - 6}" y="${y + 4}" font-size="9" fill="#707070" text-anchor="end">${label}</text>`;
+  }
+
+  // X labels — show every ~4th week (skip crowded)
+  let xLabels = "";
+  const labelEvery = Math.max(1, Math.ceil(points.length / 8));
+  points.forEach((p, i) => {
+    if (i % labelEvery !== 0 && i !== points.length - 1) return;
+    const x = xFor(i);
+    const dt = parseISO(p.date);
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const label = `${dt.getDate()}${months[dt.getMonth()].slice(0,3)}`;
+    xLabels += `<text x="${x}" y="${H - 10}" font-size="9" fill="#707070" text-anchor="middle">${label}</text>`;
+  });
+
+  // Build paths — break line on null values (draw only segments between adjacent non-null)
+  function buildPath(getter) {
+    let d = "";
+    let inSegment = false;
+    points.forEach((p, i) => {
+      const v = getter(p);
+      if (v == null) { inSegment = false; return; }
+      const cmd = inSegment ? "L" : "M";
+      d += cmd + xFor(i) + "," + yFor(v);
+      inSegment = true;
+    });
+    return d;
+  }
+  const predPath = buildPath(p => p.predicted);
+  const actPath = buildPath(p => p.actual);
+
+  // Dots
+  let predDots = "", actDots = "";
+  points.forEach((p, i) => {
+    if (p.predicted != null) {
+      predDots += `<circle cx="${xFor(i)}" cy="${yFor(p.predicted)}" r="3" fill="#ff6b35"/>`;
+    }
+    if (p.actual != null) {
+      actDots += `<circle cx="${xFor(i)}" cy="${yFor(p.actual)}" r="3" fill="#60a5fa"/>`;
+    }
+  });
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      ${grid}${xLabels}
+      ${predPath ? `<path d="${predPath}" stroke="#ff6b35" stroke-width="2" fill="none" stroke-linejoin="round"/>` : ""}
+      ${actPath ? `<path d="${actPath}" stroke="#60a5fa" stroke-width="2" fill="none" stroke-linejoin="round"/>` : ""}
+      ${predDots}${actDots}
+      <text x="${W - pad.right}" y="${pad.top - 4}" font-size="9" fill="#707070" text-anchor="end">↑ loss   ↓ gain</text>
+    </svg>
+  `;
+}
+
+// ------------------------------------------------------------------
 // RENDERING — STATS VIEW (charts + headline numbers)
 // ------------------------------------------------------------------
 
@@ -2490,6 +2795,29 @@ function renderSettings() {
 
   app.innerHTML = `
     <details class="section" open>
+      <summary>Profile (for BMR / predictor)</summary>
+      <div class="section-body">
+        <div class="card">
+          <div class="settings-row">
+            <div class="label">Age<div class="desc">years</div></div>
+            <input type="number" step="1" min="15" max="100" data-setting="age" value="${meta.age != null ? meta.age : ""}" placeholder="—">
+          </div>
+          <div class="settings-row">
+            <div class="label">Height<div class="desc">cm</div></div>
+            <input type="number" step="1" min="120" max="230" data-setting="heightCm" value="${meta.heightCm != null ? meta.heightCm : ""}" placeholder="—">
+          </div>
+          <div class="settings-row">
+            <div class="label">Sex<div class="desc">for BMR formula</div></div>
+            <select data-setting="sex">
+              <option value="male" ${meta.sex === "male" ? "selected" : ""}>Male</option>
+              <option value="female" ${meta.sex === "female" ? "selected" : ""}>Female</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="section" open>
       <summary>Program basics</summary>
       <div class="section-body">
         <div class="card">
@@ -2580,7 +2908,7 @@ function renderSettings() {
       const key = inp.dataset.setting;
       let v = e.target.value;
       if (["startWeightKg","targetWeightKg"].includes(key)) v = parseFloat(v);
-      if (key === "dailyCalorieTarget") {
+      if (["dailyCalorieTarget","age","heightCm"].includes(key)) {
         v = v === "" ? null : parseInt(v, 10);
         if (v != null && !Number.isFinite(v)) v = null;
       }
@@ -2690,6 +3018,7 @@ function render() {
   renderTopbar();
   if (state.view === "today") renderToday();
   else if (state.view === "nutrition") renderNutrition();
+  else if (state.view === "predictor") renderPredictor();
   else if (state.view === "stats") renderStats();
   else if (state.view === "calendar") renderCalendar();
   else if (state.view === "settings") renderSettings();
