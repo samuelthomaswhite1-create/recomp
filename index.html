@@ -603,15 +603,11 @@
     padding: 8px 0;
   }
   .meal-actions {
-    display: flex; gap: 8px; overflow-x: auto;
+    display: flex; gap: 8px;
     margin-top: 10px;
-    padding-bottom: 4px;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+    align-items: stretch;
   }
-  .meal-actions::-webkit-scrollbar { display: none; }
   .meal-actions button {
-    flex-shrink: 0;
     padding: 10px 14px;
     border-radius: 10px;
     font-weight: 600;
@@ -621,33 +617,60 @@
   .meal-actions .add-btn {
     background: var(--accent);
     color: #0a0a0a;
+    flex-shrink: 0;
   }
-  .meal-actions .fav-btn {
+  .meal-actions .favs-btn {
     background: var(--surface-2);
     border: 1px solid var(--border);
     color: var(--text);
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
   }
-  .meal-actions .fav-btn .fav-kcal {
-    color: var(--muted); font-size: 11px; margin-left: 4px;
+  .meal-actions .favs-btn .fb-count {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
     font-variant-numeric: tabular-nums;
+  }
+  .meal-actions .favs-btn .fb-caret {
+    color: var(--dim);
+    font-size: 10px;
+    transition: transform 0.15s;
+  }
+  .meal-actions .favs-btn.open .fb-caret { transform: rotate(180deg); }
+  .favs-menu {
+    display: flex; flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+  }
+  .favs-menu[hidden] { display: none; }
+  .fav-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 11px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 14px;
+    text-align: left;
+    color: var(--text);
+    cursor: pointer;
+    width: 100%;
+  }
+  .fav-item:active { background: var(--border); }
+  .fav-item .fi-kcal {
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+    margin-left: 10px;
   }
   .no-favs-hint {
     font-size: 11px; color: var(--dim);
     margin-top: 8px;
     line-height: 1.4;
-  }
-  .manage-favs-row {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 10px;
-  }
-  .manage-favs-btn {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 8px 12px;
-    border-radius: 10px;
-    font-size: 12px;
-    font-weight: 600;
   }
 
   /* Meal / favorite modal form */
@@ -1137,6 +1160,7 @@ function loadData() {
       _cachedData.shiftRoster = _cachedData.shiftRoster || {};
       _cachedData.favorites = _cachedData.favorites || [];
       _cachedData.schemaVersion = SCHEMA_VERSION;
+      ensureRecentsSeeded(_cachedData);
       return _cachedData;
     }
   } catch (e) {
@@ -1147,9 +1171,67 @@ function loadData() {
     meta: Object.assign({}, DEFAULT_META),
     shiftRoster: {},
     favorites: [],
-    days: {}
+    days: {},
+    recents: { morning: [], arvo: [], dinner: [] }
   };
   return _cachedData;
+}
+
+// Seed per-section recents from existing meal log history so previously-logged
+// items are immediately available in the new UI. Runs once per stored dataset.
+function ensureRecentsSeeded(data) {
+  if (data.recents && data._recentsSeeded) {
+    for (const s of ["morning", "arvo", "dinner"]) {
+      if (!data.recents[s]) data.recents[s] = [];
+    }
+    return;
+  }
+  const recents = data.recents || { morning: [], arvo: [], dinner: [] };
+  for (const s of ["morning", "arvo", "dinner"]) {
+    if (!recents[s]) recents[s] = [];
+  }
+  const dates = Object.keys(data.days || {}).sort();
+  for (const iso of dates) {
+    const day = data.days[iso];
+    if (!day || !day.meals) continue;
+    const ts = parseISO(iso).getTime();
+    for (const section of ["morning", "arvo", "dinner"]) {
+      const entries = day.meals[section] || [];
+      for (const e of entries) {
+        upsertRecent(recents[section], e.name, e.kcal, ts);
+      }
+    }
+  }
+  data.recents = recents;
+  data._recentsSeeded = true;
+}
+
+// Dedup key = trimmed, lowercased name. Latest kcal + latest timestamp win.
+function upsertRecent(sectionArr, name, kcal, timestamp) {
+  const clean = (name || "").trim();
+  if (!clean) return;
+  const key = clean.toLowerCase();
+  const existing = sectionArr.find(r => r.name.trim().toLowerCase() === key);
+  if (existing) {
+    existing.name = clean;
+    existing.kcal = kcal;
+    existing.lastUsed = Math.max(existing.lastUsed || 0, timestamp);
+  } else {
+    sectionArr.push({ name: clean, kcal, lastUsed: timestamp });
+  }
+}
+
+function bumpRecent(section, name, kcal, timestamp) {
+  const data = loadData();
+  if (!data.recents[section]) data.recents[section] = [];
+  upsertRecent(data.recents[section], name, kcal, timestamp || Date.now());
+  saveData();
+}
+
+function getSectionRecents(section) {
+  const data = loadData();
+  const arr = (data.recents && data.recents[section]) || [];
+  return arr.slice().sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
 }
 
 function uid() {
@@ -1168,6 +1250,7 @@ function getMealsForDay(iso) {
 function addMealEntry(iso, section, entry) {
   const meals = getMealsForDay(iso);
   meals[section].push({ id: uid(), name: entry.name, kcal: entry.kcal });
+  bumpRecent(section, entry.name, entry.kcal);
   saveData();
 }
 
@@ -1176,6 +1259,7 @@ function updateMealEntry(iso, section, id, patch) {
   const item = meals[section].find(e => e.id === id);
   if (item) {
     Object.assign(item, patch);
+    bumpRecent(section, item.name, item.kcal);
     saveData();
   }
 }
@@ -1985,7 +2069,6 @@ function renderNutrition() {
   const iso = state.currentDate;
   const total = dayTotalKcal(iso);
   const target = data.meta.dailyCalorieTarget;
-  const favorites = getFavorites();
 
   let totalCard = "";
   if (target != null && target > 0) {
@@ -2019,18 +2102,13 @@ function renderNutrition() {
     `;
   }
 
-  const manageRow = `
-    <div class="manage-favs-row">
-      <div class="muted" style="font-size: 12px;">${favorites.length} saved favorite${favorites.length === 1 ? "" : "s"}</div>
-      <button class="manage-favs-btn" data-action="manage-favs">Manage favorites</button>
-    </div>
-  `;
-
   let sectionsHtml = "";
   for (const sec of MEAL_SECTIONS) {
     const entries = getMealsForDay(iso)[sec.key];
     const secTotal = sectionTotalKcal(iso, sec.key);
-    let entriesHtml = entries.length
+    const recents = getSectionRecents(sec.key);
+
+    const entriesHtml = entries.length
       ? entries.map(e => `
           <div class="meal-entry" data-action="edit-entry" data-section="${sec.key}" data-entry-id="${e.id}">
             <div class="m-name">${escapeHtml(e.name)}</div>
@@ -2039,14 +2117,22 @@ function renderNutrition() {
         `).join("")
       : `<div class="meal-empty">No entries yet</div>`;
 
-    const favsBtns = favorites.map(f => `
-      <button class="fav-btn" data-action="add-favorite" data-section="${sec.key}" data-fav-id="${f.id}">
-        ${escapeHtml(f.name)}<span class="fav-kcal">${f.kcal}</span>
+    const favsMenuItems = recents.map(r => `
+      <button class="fav-item" data-action="add-recent" data-section="${sec.key}" data-name="${escapeHtml(r.name)}" data-kcal="${r.kcal}">
+        <span class="fi-name">${escapeHtml(r.name)}</span>
+        <span class="fi-kcal">${r.kcal} kcal</span>
       </button>
     `).join("");
 
+    const favsButton = recents.length
+      ? `<button class="favs-btn" data-action="toggle-favs" data-section="${sec.key}">
+           <span>Favourites <span class="fb-count">(${recents.length})</span></span>
+           <span class="fb-caret">▾</span>
+         </button>`
+      : "";
+
     sectionsHtml += `
-      <div class="meal-section">
+      <div class="meal-section" data-section="${sec.key}">
         <div class="meal-section-head">
           <h3>${sec.label}</h3>
           <div class="sub">${secTotal} kcal</div>
@@ -2054,14 +2140,14 @@ function renderNutrition() {
         <div class="meal-entries">${entriesHtml}</div>
         <div class="meal-actions">
           <button class="add-btn" data-action="add-entry" data-section="${sec.key}">+ Add</button>
-          ${favsBtns}
+          ${favsButton}
         </div>
-        ${!favorites.length ? `<div class="no-favs-hint">Tap <strong>Manage favorites</strong> above to save common foods (coffee, protein shake) as one-tap buttons here.</div>` : ""}
+        ${recents.length ? `<div class="favs-menu" hidden>${favsMenuItems}</div>` : `<div class="no-favs-hint">Items you add here will appear as one-tap recents.</div>`}
       </div>
     `;
   }
 
-  app.innerHTML = totalCard + manageRow + sectionsHtml;
+  app.innerHTML = totalCard + sectionsHtml;
 
   // Wire actions
   app.querySelectorAll('[data-action="add-entry"]').forEach(btn => {
@@ -2070,17 +2156,30 @@ function renderNutrition() {
   app.querySelectorAll('[data-action="edit-entry"]').forEach(el => {
     el.addEventListener("click", () => openMealEntryModal(iso, el.dataset.section, el.dataset.entryId));
   });
-  app.querySelectorAll('[data-action="add-favorite"]').forEach(btn => {
+
+  // Toggle Favourites dropdown (in-place — don't re-render)
+  app.querySelectorAll('[data-action="toggle-favs"]').forEach(btn => {
     btn.addEventListener("click", () => {
-      const fav = getFavorites().find(f => f.id === btn.dataset.favId);
-      if (!fav) return;
-      addMealEntry(iso, btn.dataset.section, { name: fav.name, kcal: fav.kcal });
-      renderNutrition();
-      showToast(`${fav.name} added`);
+      const section = btn.closest(".meal-section");
+      const menu = section.querySelector(".favs-menu");
+      if (!menu) return;
+      const isHidden = menu.hasAttribute("hidden");
+      if (isHidden) menu.removeAttribute("hidden"); else menu.setAttribute("hidden", "");
+      btn.classList.toggle("open", isHidden);
     });
   });
-  const mf = app.querySelector('[data-action="manage-favs"]');
-  if (mf) mf.addEventListener("click", openFavoritesModal);
+
+  // Tap a recent → log it into that section
+  app.querySelectorAll('[data-action="add-recent"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.name;
+      const kcal = parseInt(btn.dataset.kcal, 10);
+      addMealEntry(iso, btn.dataset.section, { name, kcal });
+      renderNutrition();
+      showToast(`${name} added`);
+    });
+  });
+
   const gs = app.querySelector('[data-action="go-settings"]');
   if (gs) gs.addEventListener("click", () => setView("settings"));
 }
@@ -2105,12 +2204,6 @@ function openMealEntryModal(iso, section, editEntryId) {
       <input type="number" inputmode="numeric" step="1" min="0" max="5000"
              id="meal-kcal" value="${editing ? editing.kcal : ""}" placeholder="kcal">
     </div>
-    ${!editing ? `
-      <label class="form-checkbox" for="save-fav">
-        <input type="checkbox" id="save-fav">
-        <span>Also save as favorite</span>
-      </label>
-    ` : ""}
     <div class="modal-btn-row">
       ${editing ? `<button class="btn danger" data-action="delete-entry">Delete</button>` : ""}
       <button class="btn primary" data-action="save-entry">${editing ? "Save" : "Add to " + secLabel}</button>
@@ -2128,8 +2221,6 @@ function openMealEntryModal(iso, section, editEntryId) {
         updateMealEntry(iso, section, editEntryId, { name, kcal });
       } else {
         addMealEntry(iso, section, { name, kcal });
-        const saveFav = root.querySelector("#save-fav");
-        if (saveFav && saveFav.checked) addFavorite({ name, kcal });
       }
       closeModal();
       renderNutrition();
@@ -2139,55 +2230,6 @@ function openMealEntryModal(iso, section, editEntryId) {
     if (delBtn) delBtn.addEventListener("click", () => {
       deleteMealEntry(iso, section, editEntryId);
       closeModal();
-      renderNutrition();
-    });
-  });
-}
-
-function openFavoritesModal() {
-  const favs = getFavorites();
-  const listHtml = favs.length ? favs.map(f => `
-    <div class="fav-list-row" data-fav-id="${f.id}">
-      <div class="fav-info">
-        <div class="n">${escapeHtml(f.name)}</div>
-        <div class="k">${f.kcal} kcal</div>
-      </div>
-      <button class="del-btn" data-action="del-fav" data-fav-id="${f.id}">Remove</button>
-    </div>
-  `).join("") : `<div class="muted" style="font-size: 13px; padding: 8px 0;">No favorites yet. Add one below.</div>`;
-
-  const html = `
-    <div class="fav-list">${listHtml}</div>
-    <div style="border-top: 1px solid var(--border); padding-top: 12px;">
-      <div class="form-row">
-        <label>New favorite name</label>
-        <input type="text" id="new-fav-name" placeholder="e.g. Morning coffee" autocomplete="off">
-      </div>
-      <div class="form-row">
-        <label>Calories</label>
-        <input type="number" inputmode="numeric" step="1" min="0" max="5000"
-               id="new-fav-kcal" placeholder="kcal">
-      </div>
-      <div class="modal-btn-row">
-        <button class="btn primary" data-action="add-fav">Add favorite</button>
-      </div>
-    </div>
-  `;
-
-  openModal("Manage favorites", html, root => {
-    root.querySelectorAll('[data-action="del-fav"]').forEach(btn => {
-      btn.addEventListener("click", () => {
-        deleteFavorite(btn.dataset.favId);
-        openFavoritesModal();
-      });
-    });
-    root.querySelector('[data-action="add-fav"]').addEventListener("click", () => {
-      const name = root.querySelector("#new-fav-name").value.trim();
-      const kcal = parseInt(root.querySelector("#new-fav-kcal").value, 10);
-      if (!name) { showToast("Name required"); return; }
-      if (!Number.isFinite(kcal) || kcal < 0) { showToast("Enter calories"); return; }
-      addFavorite({ name, kcal });
-      openFavoritesModal();
       renderNutrition();
     });
   });
