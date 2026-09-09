@@ -523,6 +523,50 @@
   details.section[open] summary::after { transform: rotate(180deg); }
   details.section .section-body { padding: 12px 4px; }
 
+  /* Extra sessions */
+  .section-heading {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    margin: 14px 4px 8px;
+  }
+  .session-card.extra { border-color: rgba(167, 139, 250, 0.35); }
+  .session-tag.extra-tag { color: var(--night); }
+  .add-extra-btn {
+    width: 100%;
+    padding: 12px;
+    border-radius: 12px;
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 14px;
+    margin-top: 4px;
+  }
+  .add-extra-btn:active { background: var(--surface-2); }
+  .type-picker {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+    margin-bottom: 14px;
+  }
+  .type-pick {
+    padding: 10px 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .type-pick.on {
+    background: var(--accent);
+    color: #0a0a0a;
+    border-color: var(--accent);
+  }
+
   /* SFET standards rows in Settings */
   .std-row {
     background: var(--surface);
@@ -1301,6 +1345,75 @@ function getSectionRecents(section) {
 }
 
 // ------------------------------------------------------------------
+// EXTRA SESSIONS — user-logged bonus activity per day
+// ------------------------------------------------------------------
+
+// Field bitmap per type: name, variant, durationMin, distanceKm, loadKg
+const EXTRA_TYPES = [
+  { key: "run",  label: "Run",  variants: ["easy","threshold","tempo","speed","long","race","other"],
+    fields: { variant: true, distanceKm: true, durationMin: true, hrAvg: true } },
+  { key: "swim", label: "Swim",
+    fields: { distanceKm: true, durationMin: true } },
+  { key: "gym",  label: "Gym",
+    fields: { name: true, durationMin: true } },
+  { key: "hiit", label: "HIIT",
+    fields: { name: true, durationMin: true, hrAvg: true } },
+  { key: "bike", label: "Bike",
+    fields: { distanceKm: true, durationMin: true, hrAvg: true } },
+  { key: "ruck", label: "Ruck",
+    fields: { distanceKm: true, loadKg: true, durationMin: true } }
+];
+
+function getExtraSessions(iso) {
+  const day = getDay(iso);
+  if (!day.extraSessions) day.extraSessions = [];
+  return day.extraSessions;
+}
+
+function addExtraSession(iso, entry) {
+  const list = getExtraSessions(iso);
+  const id = "extra-" + uid();
+  list.push(Object.assign({
+    id,
+    type: entry.type,
+    createdAt: Date.now(),
+    completed: true   // logging one means it happened
+  }, entry));
+  saveData();
+  return id;
+}
+
+function updateExtraSession(iso, id, patch) {
+  const list = getExtraSessions(iso);
+  const item = list.find(e => e.id === id);
+  if (item) { Object.assign(item, patch); saveData(); }
+}
+
+function deleteExtraSession(iso, id) {
+  const day = getDay(iso);
+  day.extraSessions = (day.extraSessions || []).filter(e => e.id !== id);
+  saveData();
+}
+
+function describeExtra(e) {
+  const parts = [];
+  if (e.type === "run" && e.variant) parts.push(cap(e.variant));
+  if (e.distanceKm != null) parts.push(e.distanceKm + "km");
+  if (e.loadKg != null)     parts.push(e.loadKg + "kg");
+  if (e.durationMin != null) parts.push(e.durationMin + "min");
+  if (e.hrAvg != null)       parts.push(e.hrAvg + " bpm");
+  return parts.join(" · ") || "no details";
+}
+
+function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ""; }
+
+function defaultExtraName(type, variant) {
+  const t = EXTRA_TYPES.find(x => x.key === type);
+  if (type === "run" && variant) return cap(variant) + " Run";
+  return t ? t.label : "";
+}
+
+// ------------------------------------------------------------------
 // SFET STANDARDS — logging + formatting
 // ------------------------------------------------------------------
 
@@ -1848,13 +1961,27 @@ function renderToday() {
   // Quick entry
   html += renderQuickEntryCard(iso, day);
 
-  // Sessions
+  // Prescribed sessions
   html += `<div style="margin-top: 6px;"></div>`;
   for (const s of rx.sessions) {
     html += renderSessionCard(iso, s);
   }
 
-  // Day complete button + notes
+  // Extra (user-logged) sessions
+  const extras = getExtraSessions(iso);
+  if (extras.length) {
+    html += `<div class="section-heading">Extra sessions</div>`;
+    for (const e of extras) {
+      html += renderExtraCard(iso, e);
+    }
+  }
+
+  // Add extra session button
+  html += `
+    <button class="add-extra-btn" data-action="add-extra">+ Log extra session</button>
+  `;
+
+  // Day complete button + notes (only prescribed sessions count for completion)
   const allDone = rx.sessions.filter(s => s.type !== "rest").every(s => {
     const sl = day && day.sessions[s.id];
     return sl && sl.completed;
@@ -1942,6 +2069,24 @@ function renderSessionCard(iso, s) {
         </div>
       </div>
       <div class="session-body ${state.openSessions[s.id] ? "" : "collapsed"}">${body}</div>
+    </div>
+  `;
+}
+
+function renderExtraCard(iso, e) {
+  const typeSpec = EXTRA_TYPES.find(x => x.key === e.type);
+  const label = e.name || defaultExtraName(e.type, e.variant);
+  const summary = describeExtra(e);
+  return `
+    <div class="session-card extra ${e.completed ? "completed" : ""}" data-type="${e.type}" data-extra-id="${e.id}">
+      <div class="session-head" data-action="edit-extra" data-extra-id="${e.id}">
+        <div class="session-head-body">
+          <div class="session-tag extra-tag">Extra · ${(typeSpec?.label || e.type).toUpperCase()}</div>
+          <div class="name">${escapeHtml(label)}</div>
+          <div class="meta">${escapeHtml(summary)}${e.notes ? ` · <span class="dim">${escapeHtml(e.notes)}</span>` : ""}</div>
+        </div>
+        <div class="session-check on">✓</div>
+      </div>
     </div>
   `;
 }
@@ -2092,6 +2237,13 @@ function wireQuickEntry(iso) {
 
 function wireToday(iso) {
   wireQuickEntry(iso);
+
+  // Extra sessions: add + edit
+  const addExtraBtn = document.querySelector('[data-action="add-extra"]');
+  if (addExtraBtn) addExtraBtn.addEventListener("click", () => openExtraModal(iso, null));
+  document.querySelectorAll('[data-action="edit-extra"]').forEach(el => {
+    el.addEventListener("click", () => openExtraModal(iso, el.dataset.extraId));
+  });
 
   // Toggle session body
   document.querySelectorAll('[data-action="toggle-session-body"]').forEach(el => {
@@ -2403,6 +2555,168 @@ function openMealEntryModal(iso, section, editEntryId) {
       deleteMealEntry(iso, section, editEntryId);
       closeModal();
       renderNutrition();
+    });
+  });
+}
+
+// ------------------------------------------------------------------
+// EXTRA SESSION MODAL
+// ------------------------------------------------------------------
+
+function openExtraModal(iso, editId) {
+  const existing = editId ? getExtraSessions(iso).find(e => e.id === editId) : null;
+  const initialType = existing ? existing.type : "run";
+
+  function typePickerHtml(selType) {
+    return EXTRA_TYPES.map(t => `
+      <button class="type-pick ${t.key === selType ? "on" : ""}" data-type="${t.key}">${t.label}</button>
+    `).join("");
+  }
+
+  function fieldsHtml(selType, e) {
+    const spec = EXTRA_TYPES.find(t => t.key === selType);
+    if (!spec) return "";
+    e = e || {};
+    let html = "";
+
+    if (spec.fields.name) {
+      html += `
+        <div class="form-row">
+          <label>Session name / focus</label>
+          <input type="text" id="ex-name" value="${e.name ? escapeHtml(e.name) : ""}" placeholder="e.g. Upper body, chest+arms" autocomplete="off">
+        </div>
+      `;
+    }
+    if (spec.fields.variant) {
+      const variants = spec.variants || [];
+      html += `
+        <div class="form-row">
+          <label>Type</label>
+          <select id="ex-variant">
+            ${variants.map(v => `<option value="${v}" ${e.variant === v ? "selected" : ""}>${cap(v)}</option>`).join("")}
+          </select>
+        </div>
+      `;
+    }
+    if (spec.fields.distanceKm) {
+      html += `
+        <div class="form-row">
+          <label>Distance (km)</label>
+          <input type="number" inputmode="decimal" step="0.1" min="0" max="200"
+                 id="ex-distance" value="${e.distanceKm != null ? e.distanceKm : ""}" placeholder="km">
+        </div>
+      `;
+    }
+    if (spec.fields.loadKg) {
+      html += `
+        <div class="form-row">
+          <label>Load (kg)</label>
+          <input type="number" inputmode="decimal" step="0.5" min="0" max="60"
+                 id="ex-load" value="${e.loadKg != null ? e.loadKg : ""}" placeholder="kg">
+        </div>
+      `;
+    }
+    if (spec.fields.durationMin) {
+      html += `
+        <div class="form-row">
+          <label>Time (min)</label>
+          <input type="number" inputmode="numeric" step="1" min="0" max="600"
+                 id="ex-duration" value="${e.durationMin != null ? e.durationMin : ""}" placeholder="min">
+        </div>
+      `;
+    }
+    if (spec.fields.hrAvg) {
+      html += `
+        <div class="form-row">
+          <label>Avg HR (bpm)</label>
+          <input type="number" inputmode="numeric" step="1" min="40" max="220"
+                 id="ex-hr" value="${e.hrAvg != null ? e.hrAvg : ""}" placeholder="—">
+        </div>
+      `;
+    }
+    html += `
+      <div class="form-row">
+        <label>Notes (optional)</label>
+        <input type="text" id="ex-notes" value="${e.notes ? escapeHtml(e.notes) : ""}" placeholder="conditions, gear, RPE …" autocomplete="off">
+      </div>
+    `;
+    return html;
+  }
+
+  const html = `
+    <div class="type-picker" id="ex-type-picker">${typePickerHtml(initialType)}</div>
+    <div id="ex-fields">${fieldsHtml(initialType, existing)}</div>
+    <div class="modal-btn-row">
+      ${existing ? `<button class="btn danger" data-action="delete-extra">Delete</button>` : ""}
+      <button class="btn primary" data-action="save-extra">${existing ? "Save" : "Log session"}</button>
+    </div>
+  `;
+
+  openModal(existing ? "Edit extra session" : "Log extra session", html, root => {
+    let currentType = initialType;
+
+    root.querySelectorAll('[data-type]').forEach(btn => {
+      btn.addEventListener("click", () => {
+        currentType = btn.dataset.type;
+        root.querySelector("#ex-type-picker").innerHTML = typePickerHtml(currentType);
+        root.querySelector("#ex-fields").innerHTML = fieldsHtml(currentType, existing && existing.type === currentType ? existing : null);
+        // Re-wire type picker after replace
+        root.querySelectorAll('[data-type]').forEach(b => b.addEventListener("click", () => {
+          const el = document.querySelector('[data-action="save-extra"]');
+          if (el) el.click.__reset = true;
+        }));
+        wireTypePicker();
+      });
+    });
+
+    function wireTypePicker() {
+      root.querySelectorAll("#ex-type-picker [data-type]").forEach(btn => {
+        btn.onclick = () => {
+          currentType = btn.dataset.type;
+          root.querySelector("#ex-type-picker").innerHTML = typePickerHtml(currentType);
+          root.querySelector("#ex-fields").innerHTML = fieldsHtml(currentType, existing && existing.type === currentType ? existing : null);
+          wireTypePicker();
+        };
+      });
+    }
+    wireTypePicker();
+
+    root.querySelector('[data-action="save-extra"]').addEventListener("click", () => {
+      const patch = { type: currentType };
+      const nameEl = root.querySelector("#ex-name");
+      const varEl  = root.querySelector("#ex-variant");
+      const distEl = root.querySelector("#ex-distance");
+      const loadEl = root.querySelector("#ex-load");
+      const durEl  = root.querySelector("#ex-duration");
+      const hrEl   = root.querySelector("#ex-hr");
+      const notesEl = root.querySelector("#ex-notes");
+      if (nameEl)  patch.name = nameEl.value.trim() || undefined;
+      if (varEl)   patch.variant = varEl.value || undefined;
+      if (distEl)  patch.distanceKm = distEl.value === "" ? null : parseFloat(distEl.value);
+      if (loadEl)  patch.loadKg    = loadEl.value === "" ? null : parseFloat(loadEl.value);
+      if (durEl)   patch.durationMin = durEl.value === "" ? null : parseInt(durEl.value, 10);
+      if (hrEl)    patch.hrAvg     = hrEl.value === "" ? null : parseInt(hrEl.value, 10);
+      if (notesEl) patch.notes    = notesEl.value.trim() || "";
+      // Require at least ONE data field beyond type
+      const hasData = patch.name || patch.variant || patch.distanceKm != null ||
+                      patch.loadKg != null || patch.durationMin != null || patch.hrAvg != null || patch.notes;
+      if (!hasData) { showToast("Add at least one detail"); return; }
+      if (existing) {
+        updateExtraSession(iso, editId, patch);
+      } else {
+        addExtraSession(iso, patch);
+      }
+      closeModal();
+      render();
+      showToast(existing ? "Session updated" : "Extra session logged");
+    });
+
+    const del = root.querySelector('[data-action="delete-extra"]');
+    if (del) del.addEventListener("click", () => {
+      deleteExtraSession(iso, editId);
+      closeModal();
+      render();
+      showToast("Deleted");
     });
   });
 }
