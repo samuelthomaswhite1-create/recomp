@@ -523,6 +523,61 @@
   details.section[open] summary::after { transform: rotate(180deg); }
   details.section .section-body { padding: 12px 4px; }
 
+  /* SFET standards rows in Settings */
+  .std-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+  }
+  .std-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px;
+  }
+  .std-label { font-weight: 700; font-size: 14px; }
+  .std-log-btn {
+    background: var(--accent); color: #0a0a0a;
+    padding: 6px 12px; border-radius: 8px;
+    font-size: 12px; font-weight: 700;
+  }
+  .std-body {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 12px;
+  }
+  .std-current-val {
+    font-size: 22px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .std-current-val.delta-good { color: var(--success); }
+  .std-current-val.delta-warn { color: var(--warn); }
+  .std-current-val.delta-bad  { color: var(--danger); }
+  .std-current-meta { font-size: 11px; color: var(--muted); }
+  .std-target {
+    font-size: 11px; color: var(--dim);
+    text-align: right; line-height: 1.4;
+    flex-shrink: 0;
+  }
+  .std-history { display: flex; flex-direction: column; gap: 4px; }
+  .std-history-row {
+    display: grid; grid-template-columns: 1fr auto auto; gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .std-history-row .del-btn {
+    color: var(--danger);
+    background: rgba(248,113,113,0.10);
+    border: 1px solid rgba(248,113,113,0.3);
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
   /* Predictor view */
   .pred-lines { display: flex; flex-direction: column; margin-top: 6px; gap: 2px; }
   .pred-val   { font-size: 22px; font-weight: 700; color: var(--accent);  font-variant-numeric: tabular-nums; }
@@ -776,19 +831,31 @@ const STORAGE_KEY = "recompTracker.v1";
 const SCHEMA_VERSION = 1;
 
 const DEFAULT_META = {
-  startDate: "2026-06-22",
+  startDate: "2026-06-22",           // Weight tracking start (kept for chart continuity)
+  sfetStartDate: "2026-09-07",       // SFET training program start (Mon of current week)
   startWeightKg: 79.0,
   targetWeightKg: 69.0,
-  targetDate: "2027-06-21",
+  targetDate: "2027-03-07",          // SFET selection window
   ageBracket: "30-39",
   lastBackupAt: null,
-  rosterAnchor: "2026-06-22",  // The Monday of cycle position "night-2"
+  rosterAnchor: "2026-06-22",        // Legacy; unused post-SFET pivot
   setupComplete: false,
-  dailyCalorieTarget: null,     // Optional daily kcal budget for the nutrition tab
-  age: null,                    // Exact years — required for BMR
-  heightCm: null,               // Required for BMR
-  sex: "male"                   // "male" | "female" — chooses BMR formula constant
+  dailyCalorieTarget: null,
+  age: null,
+  heightCm: null,
+  sex: "male"
 };
+
+// SFET benchmarks — SOCOMD physical standards
+// unit: "reps" | "time" (seconds) | "km"
+const SFET_STANDARDS = [
+  { id: "pushUps",    label: "Cadence Push-ups",          unit: "reps", min: 40,  comp: 65,  higherBetter: true,  short: "Push-ups" },
+  { id: "pullUps",    label: "Cadence Pull-ups",          unit: "reps", min: 7,   comp: 12,  higherBetter: true,  short: "Pull-ups" },
+  { id: "webbingRun", label: "3.2km Webbing Run",         unit: "time", min: 960, comp: 870, higherBetter: false, short: "3.2km Web" },
+  { id: "ruck90",     label: "90min Ruck 28kg",           unit: "km",   min: 10,  comp: 11,  higherBetter: true,  short: "Ruck 90" },
+  { id: "kitSwim",    label: "400m Kit Swim + 2min tread", unit: "time", min: 960, comp: 720, higherBetter: false, short: "Kit Swim" },
+  { id: "run2400",    label: "2.4km Run",                 unit: "time", min: 540, comp: 480, higherBetter: false, short: "2.4km" }
+];
 
 // 7700 kcal/kg is the standard clinical estimate (Wishnofsky 1958), still used
 // in modern energy-balance models. It assumes a fixed energy density for weight
@@ -804,127 +871,99 @@ const MEAL_SECTIONS = [
   { key: "dinner",  label: "Dinner" }
 ];
 
-// 6-week cycle starting from rosterAnchor: night-2, post-nights, day, day, day, night-1, then repeat
-const WEEK_CYCLE = ["night", "post-nights", "day", "day", "day", "night"];
-
-// Phases — weeks 1-16 Cut, 17-32 Fitness, 33-52 Training
+// SFET prep: 26-week block, phases indexed from sfetStartDate (Mon of program week 1).
 const PHASES = [
-  { id: 1, name: "Cut",      startWeek: 1,  endWeek: 16, mesoCount: 4 },
-  { id: 2, name: "Fitness",  startWeek: 17, endWeek: 32, mesoCount: 4 },
-  { id: 3, name: "Training", startWeek: 33, endWeek: 52, mesoCount: 5 }
+  { id: 1, name: "Base",  startWeek: 1,  endWeek: 8,  mesoCount: 2 },
+  { id: 2, name: "Build", startWeek: 9,  endWeek: 20, mesoCount: 3 },
+  { id: 3, name: "Peak",  startWeek: 21, endWeek: 26, mesoCount: 2 }
 ];
 
-// Each mesocycle = 4 weeks: build, build+, push, deload
-// Rep ranges and RPE adjust per phase.
+// Each mesocycle = 4 weeks (build → build+ → push → deload).
+// Reps + intensity + endurance targets scale per phase to SFET peak.
 const PHASE_PRESCRIPTION = {
-  1: {  // CUT
-    mainLift:      { repsLow: 8,  repsHigh: 10, sets: 4, baseRpe: 7 },
-    secondaryLift: { repsLow: 8,  repsHigh: 12, sets: 3, baseRpe: 7 },
-    accessory:     { repsLow: 10, repsHigh: 15, sets: 3, baseRpe: 7 },
-    longRun:       { distanceKm: 6, type: "easy" },
-    easyRun:       { durationMin: 30 },
-    qualityRun:    null,
-    swim:          { distanceKm: 1, type: "easy" }
+  1: {  // BASE (weeks 1-8) — rebuild strength, condition to load
+    mainLift:      { repsLow: 6, repsHigh: 10, sets: 4, baseRpe: 7 },
+    secondaryLift: { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 7 },
+    accessory:     { repsLow: 8, repsHigh: 12, sets: 3, baseRpe: 7 },
+    cadence:       { sets: 3, pct: 0.6, note: "3 × ~60% of your current max — build volume" },
+    longRun:       { distanceKm: 10, type: "easy",       note: "Z2 / conversational" },
+    easyRun:       { durationMin: 30, note: "Z2 recovery" },
+    thresholdRun:  { durationMin: 20, paceHint: "~4:45/km", note: "20 min continuous at threshold" },
+    speedIntervals:{ reps: 4, distanceM: 400, paceHint: "4:00/km", rest: "2 min jog", note: "4 × 400m, 2 min jog recovery" },
+    ruck:          { distanceKm: 6,  loadKg: 12, paceHint: "9:00/km", note: "Get used to the pack; pace doesn't matter yet" },
+    swim:          { distanceKm: 0.3, kit: false, note: "Technique + 200m + 2min tread" }
   },
-  2: {  // FITNESS
-    mainLift:      { repsLow: 5,  repsHigh: 8,  sets: 4, baseRpe: 8 },
-    secondaryLift: { repsLow: 6,  repsHigh: 10, sets: 3, baseRpe: 7 },
-    accessory:     { repsLow: 8,  repsHigh: 12, sets: 3, baseRpe: 7 },
-    longRun:       { distanceKm: 10, type: "progressive" },
-    easyRun:       { durationMin: 35 },
-    qualityRun:    { type: "tempo", durationMin: 20, note: "20 min @ comfortably hard (~HM pace)" },
-    swim:          { distanceKm: 1, type: "easy" }
+  2: {  // BUILD (weeks 9-20) — strength endurance, ruck load progression
+    mainLift:      { repsLow: 5, repsHigh: 8,  sets: 4, baseRpe: 8 },
+    secondaryLift: { repsLow: 5, repsHigh: 8,  sets: 3, baseRpe: 8 },
+    accessory:     { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 7 },
+    cadence:       { sets: 3, pct: 0.7, note: "3 × ~70% of PR — push volume close to failure" },
+    longRun:       { distanceKm: 13, type: "progressive", note: "Easy start, last 20% at goal pace" },
+    easyRun:       { durationMin: 35, note: "Z2 recovery" },
+    thresholdRun:  { durationMin: 28, paceHint: "~4:35/km", note: "25-30 min at threshold, or 2 × 15 min with 3 min jog" },
+    speedIntervals:{ reps: 6, distanceM: 400, paceHint: "3:50/km", rest: "90s jog", note: "6 × 400m at 2.4km target pace" },
+    ruck:          { distanceKm: 9,  loadKg: 20, paceHint: "8:30/km", note: "Approaching test load; hold target pace" },
+    swim:          { distanceKm: 0.4, kit: true,  note: "300m in kit + 2min tread — time yourself" }
   },
-  3: {  // TRAINING
-    mainLift:      { repsLow: 3,  repsHigh: 6,  sets: 4, baseRpe: 8 },
-    secondaryLift: { repsLow: 5,  repsHigh: 8,  sets: 3, baseRpe: 8 },
-    accessory:     { repsLow: 8,  repsHigh: 12, sets: 3, baseRpe: 7 },
-    longRun:       { distanceKm: 13, type: "polarized" },
-    easyRun:       { durationMin: 40 },
-    qualityRun:    { type: "intervals", durationMin: 30, note: "5 × 3 min @ 10k pace, 2 min jog recovery" },
-    swim:          { distanceKm: 1, type: "easy" }
+  3: {  // PEAK (weeks 21-26) — test-specific rehearsal, taper into selection
+    mainLift:      { repsLow: 3, repsHigh: 6,  sets: 4, baseRpe: 8 },
+    secondaryLift: { repsLow: 4, repsHigh: 6,  sets: 3, baseRpe: 8 },
+    accessory:     { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 7 },
+    cadence:       { sets: 3, pct: 1.0, note: "Max-effort — SFET cadence protocol simulation" },
+    longRun:       { distanceKm: 15, type: "polarized", note: "Last 20% at goal pace" },
+    easyRun:       { durationMin: 40, note: "Z2 recovery" },
+    thresholdRun:  { durationMin: 30, paceHint: "~4:30/km", note: "30 min at threshold or 3 × 10 min at 4:30/km" },
+    speedIntervals:{ reps: 8, distanceM: 400, paceHint: "3:45/km", rest: "60s jog", note: "8 × 400m at sub-9 2.4km pace" },
+    ruck:          { distanceKm: 11, loadKg: 28, paceHint: "8:00/km", note: "SFET test load and target pace — 90 min stomp" },
+    swim:          { distanceKm: 0.4, kit: true, note: "SFET protocol: 2min tread + 400m in kit, target ≤16:00" }
   }
 };
 
-// Lift session templates
+// SFET lift templates — 3 sessions/wk with cadence finishers baked in
 const LIFT_TEMPLATES = {
-  "lower-a": {
-    name: "Lower A",
-    short: "Lower A",
-    exercises: [
-      { name: "Back Squat",        role: "mainLift",      key: "back-squat" },
-      { name: "Romanian Deadlift", role: "secondaryLift", key: "rdl" },
-      { name: "Walking Lunges",    role: "accessory",     key: "walking-lunges" },
-      { name: "Plank",             role: "accessory",     key: "plank", unit: "seconds" }
-    ]
-  },
-  "upper-a": {
-    name: "Upper A",
-    short: "Upper A",
+  "upper-push": {
+    name: "Upper Push",
+    short: "Push",
     exercises: [
       { name: "Bench Press",       role: "mainLift",      key: "bench-press" },
+      { name: "Overhead Press",    role: "secondaryLift", key: "ohp" },
+      { name: "Weighted Dips",     role: "accessory",     key: "dips" },
+      { name: "Cadence Push-ups",  role: "cadence",       key: "cadence-pushups", unit: "reps" }
+    ]
+  },
+  "upper-pull": {
+    name: "Upper Pull",
+    short: "Pull",
+    exercises: [
+      { name: "Weighted Pull-up",  role: "mainLift",      key: "wt-pullup" },
       { name: "Barbell Row",       role: "secondaryLift", key: "barbell-row" },
-      { name: "DB Overhead Press", role: "accessory",     key: "db-ohp" },
-      { name: "Face Pulls",        role: "accessory",     key: "face-pulls" }
+      { name: "Cable Row",         role: "accessory",     key: "cable-row" },
+      { name: "Cadence Pull-ups",  role: "cadence",       key: "cadence-pullups", unit: "reps" }
     ]
   },
-  "lower-b": {
-    name: "Lower B",
-    short: "Lower B",
+  "lower-strength": {
+    name: "Lower Strength",
+    short: "Lower",
     exercises: [
-      { name: "Conventional Deadlift", role: "mainLift",      key: "deadlift" },
-      { name: "Bulgarian Split Squat", role: "secondaryLift", key: "bss" },
-      { name: "Hip Thrust",            role: "accessory",     key: "hip-thrust" },
-      { name: "Hanging Knee Raise",    role: "accessory",     key: "hkr" }
-    ]
-  },
-  "upper-b": {
-    name: "Upper B",
-    short: "Upper B",
-    exercises: [
-      { name: "Overhead Press",     role: "mainLift",      key: "ohp" },
-      { name: "Pull-Up (assist OK)",role: "secondaryLift", key: "pullup" },
-      { name: "Incline DB Press",   role: "accessory",     key: "incline-db" },
-      { name: "Curl + Pushdown SS", role: "accessory",     key: "curl-pushdown" }
+      { name: "Back Squat",            role: "mainLift",      key: "back-squat" },
+      { name: "Deadlift",              role: "secondaryLift", key: "deadlift" },
+      { name: "Bulgarian Split Squat", role: "accessory",     key: "bss" },
+      { name: "Farmer's Carry",        role: "accessory",     key: "farmers-carry", unit: "meters" }
     ]
   }
 };
 
-// Weekly day templates — keyed by week type
-// Each day has a list of sessions: { slot: 'AM'|'PM', type: 'lift'|'run'|'swim'|'rest', key: ... }
+// SFET weekly template — single week, no shift variants.
+// Session type: 'lift' | 'run' (variant: threshold/speed/long/easy) | 'swim' | 'ruck' | 'rest'
 const DAY_TEMPLATES = {
-  day: { // standard day-shift week
-    Mon: [ { slot: "AM", type: "lift", key: "lower-a" } ],
-    Tue: [ { slot: "AM", type: "lift", key: "upper-a" },
-           { slot: "PM", type: "run",  variant: "long" } ],
-    Wed: [ { slot: "PM", type: "run",  variant: "easy" } ],
-    Thu: [ { slot: "PM", type: "lift", key: "lower-b" } ],
-    Fri: [ { slot: "PM", type: "lift", key: "upper-b" },
-           { slot: "PM", type: "swim" } ],
-    Sat: [ { slot: "AM", type: "run",  variant: "saturday" } ],  // resolves to easy/quality per phase
-    Sun: [ { slot: "—",  type: "rest" } ]
-  },
-  night: { // working night shifts Wed-Sun, train late PM before shift
-    Mon: [ { slot: "AM", type: "lift", key: "lower-a", intensityMod: 0 } ],
-    Tue: [ { slot: "AM", type: "lift", key: "upper-a" },
-           { slot: "PM", type: "run",  variant: "long", forceEasy: true } ],
-    Wed: [ { slot: "PM", type: "run",  variant: "easy" } ],
-    Thu: [ { slot: "PM", type: "lift", key: "lower-b", intensityMod: -1 } ],
-    Fri: [ { slot: "PM", type: "lift", key: "upper-b", intensityMod: -1 } ],
-    Sat: [ { slot: "PM", type: "swim" } ],
-    Sun: [ { slot: "—",  type: "rest" } ]
-  },
-  "post-nights": { // Mon = post-nights crash; shift sessions
-    Mon: [ { slot: "PM", type: "run", variant: "easy", short: true } ],
-    Tue: [ { slot: "AM", type: "lift", key: "lower-a" } ],
-    Wed: [ { slot: "AM", type: "lift", key: "upper-a" },
-           { slot: "PM", type: "run",  variant: "long", forceEasy: true } ],
-    Thu: [ { slot: "PM", type: "run",  variant: "easy" } ],
-    Fri: [ { slot: "PM", type: "lift", key: "lower-b" } ],
-    Sat: [ { slot: "AM", type: "lift", key: "upper-b" },
-           { slot: "PM", type: "swim" } ],
-    Sun: [ { slot: "—",  type: "rest" } ]
-  }
+  Mon: [ { slot: "AM", type: "lift", key: "upper-push" } ],
+  Tue: [ { slot: "AM", type: "run",  variant: "threshold" },
+         { slot: "PM", type: "swim" } ],
+  Wed: [ { slot: "AM", type: "lift", key: "upper-pull" } ],
+  Thu: [ { slot: "AM", type: "run",  variant: "speed" } ],
+  Fri: [ { slot: "AM", type: "lift", key: "lower-strength" } ],
+  Sat: [ { slot: "AM", type: "ruck" } ],
+  Sun: [ { slot: "AM", type: "run",  variant: "long" } ]
 };
 
 // ------------------------------------------------------------------
@@ -988,11 +1027,12 @@ function monthLabel(year, monthZeroIdx) {
 // PROGRAM CALCULATION
 // ------------------------------------------------------------------
 
+// SFET program week — indexed from sfetStartDate (Mon of week 1).
 function weekNumberFor(iso, meta) {
-  const startMon = mondayOf(meta.startDate);
+  const startMon = mondayOf(meta.sfetStartDate || meta.startDate);
   const thisMon = mondayOf(iso);
   const weeks = Math.floor(daysBetween(startMon, thisMon) / 7);
-  return weeks + 1; // 1-indexed
+  return weeks + 1;
 }
 
 function getPhase(weekNum) {
@@ -1000,7 +1040,7 @@ function getPhase(weekNum) {
   for (const p of PHASES) {
     if (weekNum >= p.startWeek && weekNum <= p.endWeek) return p;
   }
-  return PHASES[PHASES.length - 1]; // post-program — stay on Phase 3
+  return PHASES[PHASES.length - 1]; // post-program — hold Peak prescription
 }
 
 function getMesoInfo(weekNum, phase) {
@@ -1011,18 +1051,9 @@ function getMesoInfo(weekNum, phase) {
   return { phaseWeek, meso, weekInMeso, isDeload };
 }
 
+// Kept for backwards compat with old data / calendar UI — always "day" now.
 function getWeekType(iso, meta) {
-  // Override from shiftRoster if user has explicitly set this week
-  const data = loadData();
-  const monIso = mondayOf(iso);
-  if (data.shiftRoster && data.shiftRoster[monIso]) {
-    return data.shiftRoster[monIso];
-  }
-  // Default cycle starting from rosterAnchor
-  const anchorMon = mondayOf(meta.rosterAnchor || meta.startDate);
-  const weeksFromAnchor = Math.floor(daysBetween(anchorMon, monIso) / 7);
-  const pos = ((weeksFromAnchor % 6) + 6) % 6;
-  return WEEK_CYCLE[pos];
+  return "day";
 }
 
 // Suggested reps for the week within mesocycle (build → push → deload)
@@ -1047,16 +1078,18 @@ function setsForWeekInMeso(weekInMeso, baseSets) {
   return baseSets;
 }
 
-// Get prescribed sessions for a given date
+// Get prescribed sessions for a given date. Pre-SFET dates return no sessions
+// (weight/meal logs on those days still viewable — this only gates program prescription).
 function getPrescriptionForDate(iso, meta) {
+  const sfetStart = meta.sfetStartDate || meta.startDate;
+  if (iso < sfetStart) {
+    return { sessions: [], phase: null, meso: null, weekType: null, weekNum: 0, preSfet: true };
+  }
   const weekNum = weekNumberFor(iso, meta);
-  if (weekNum < 1) return { sessions: [], phase: null, meso: null, weekType: null, weekNum: 0 };
-
   const phase = getPhase(weekNum);
   const mesoInfo = getMesoInfo(weekNum, phase);
-  const weekType = getWeekType(iso, meta);
   const dow = dayOfWeekName(iso);
-  const dayTemplate = DAY_TEMPLATES[weekType][dow] || [];
+  const dayTemplate = DAY_TEMPLATES[dow] || [];
   const rx = PHASE_PRESCRIPTION[phase.id];
 
   const sessions = dayTemplate.map((s, idx) => {
@@ -1068,16 +1101,26 @@ function getPrescriptionForDate(iso, meta) {
       const tmpl = LIFT_TEMPLATES[s.key];
       sess.name = tmpl.name;
       sess.key = s.key;
-      sess.intensityMod = s.intensityMod || 0;
       sess.exercises = tmpl.exercises.map(ex => {
+        if (ex.role === "cadence") {
+          const cad = rx.cadence;
+          const sets = mesoInfo.isDeload ? Math.max(2, Math.ceil(cad.sets / 2)) : cad.sets;
+          return {
+            name: ex.name, key: ex.key, role: "cadence",
+            unit: "reps",
+            sets,
+            reps: cad.pct === 1.0 ? "MAX" : `~${Math.round(cad.pct * 100)}% of PR`,
+            rpe: cad.pct === 1.0 ? 10 : 8,
+            repsRange: cad.note,
+            note: cad.note
+          };
+        }
         const role = rx[ex.role];
         const sets = setsForWeekInMeso(mesoInfo.weekInMeso, role.sets);
         const reps = repsForWeekInMeso(mesoInfo.weekInMeso, role.repsLow, role.repsHigh);
-        const rpe = rpeForWeekInMeso(mesoInfo.weekInMeso, role.baseRpe) + (s.intensityMod || 0);
+        const rpe = rpeForWeekInMeso(mesoInfo.weekInMeso, role.baseRpe);
         return {
-          name: ex.name,
-          key: ex.key,
-          role: ex.role,
+          name: ex.name, key: ex.key, role: ex.role,
           unit: ex.unit || "kg",
           sets, reps, rpe,
           repsRange: `${role.repsLow}-${role.repsHigh}`
@@ -1087,52 +1130,62 @@ function getPrescriptionForDate(iso, meta) {
       const variant = s.variant;
       if (variant === "long") {
         const long = rx.longRun;
-        const forceEasy = s.forceEasy || mesoInfo.isDeload;
+        const forceEasy = mesoInfo.isDeload;
         sess.name = "Long Run";
         sess.cardio = {
           variant: "long",
           distanceKm: mesoInfo.isDeload ? Math.round(long.distanceKm * 0.7) : long.distanceKm,
           targetType: forceEasy ? "easy" : long.type,
-          note: forceEasy ? "All Z2 / conversational" :
-                long.type === "progressive" ? "Easy start, last 20% at goal pace" :
-                long.type === "polarized" ? "Last 20% at goal HM pace" : "Z2 / conversational"
+          note: forceEasy ? "Deload — all Z2 / conversational" : long.note
         };
-      } else if (variant === "saturday") {
-        // Phase-dependent: easy in P1, quality in P2-3
-        if (rx.qualityRun) {
-          sess.name = "Quality Run";
-          sess.cardio = {
-            variant: "quality",
-            durationMin: rx.qualityRun.durationMin,
-            targetType: rx.qualityRun.type,
-            note: rx.qualityRun.note
-          };
-        } else {
-          sess.name = "Easy Run";
-          sess.cardio = {
-            variant: "easy",
-            durationMin: rx.easyRun.durationMin,
-            targetType: "easy",
-            note: "Z2 / conversational"
-          };
-        }
+      } else if (variant === "threshold") {
+        const t = rx.thresholdRun;
+        sess.name = "Threshold Run";
+        sess.cardio = {
+          variant: "threshold",
+          durationMin: mesoInfo.isDeload ? Math.round(t.durationMin * 0.6) : t.durationMin,
+          targetType: "threshold",
+          paceHint: t.paceHint,
+          note: mesoInfo.isDeload ? "Deload — halve volume, easier pace" : t.note
+        };
+      } else if (variant === "speed") {
+        const sp = rx.speedIntervals;
+        const isDeload = mesoInfo.isDeload;
+        sess.name = "Speed Intervals";
+        sess.cardio = {
+          variant: "speed",
+          reps: isDeload ? Math.max(3, Math.floor(sp.reps / 2)) : sp.reps,
+          distanceM: sp.distanceM,
+          paceHint: sp.paceHint,
+          rest: sp.rest,
+          note: isDeload ? "Deload — half the reps, hold pace" : sp.note
+        };
       } else if (variant === "easy") {
-        const short = s.short;
-        sess.name = short ? "Easy Run (short)" : "Easy Run";
+        sess.name = "Easy Run";
         sess.cardio = {
           variant: "easy",
-          durationMin: short ? 20 : rx.easyRun.durationMin,
+          durationMin: rx.easyRun.durationMin,
           targetType: "easy",
-          note: "Z2 / conversational"
+          note: rx.easyRun.note
         };
       }
     } else if (s.type === "swim") {
-      sess.name = "Swim";
+      sess.name = "Kit Swim";
       sess.cardio = {
         variant: "swim",
         distanceKm: rx.swim.distanceKm,
-        targetType: "easy",
-        note: "Easy aerobic"
+        targetType: "kit",
+        note: rx.swim.note
+      };
+    } else if (s.type === "ruck") {
+      const r = rx.ruck;
+      const isDeload = mesoInfo.isDeload;
+      sess.name = "Ruck March";
+      sess.ruck = {
+        distanceKm: isDeload ? Math.max(4, Math.round(r.distanceKm * 0.6)) : r.distanceKm,
+        loadKg:     isDeload ? Math.max(8, Math.round(r.loadKg * 0.6))    : r.loadKg,
+        paceHint:   r.paceHint,
+        note:       isDeload ? "Deload — lighter load, shorter distance" : r.note
       };
     } else if (s.type === "rest") {
       sess.name = "Rest Day";
@@ -1140,7 +1193,7 @@ function getPrescriptionForDate(iso, meta) {
     return sess;
   });
 
-  return { sessions, phase, meso: mesoInfo, weekType, weekNum };
+  return { sessions, phase, meso: mesoInfo, weekType: "day", weekNum };
 }
 
 // ------------------------------------------------------------------
@@ -1159,8 +1212,10 @@ function loadData() {
       _cachedData.days = _cachedData.days || {};
       _cachedData.shiftRoster = _cachedData.shiftRoster || {};
       _cachedData.favorites = _cachedData.favorites || [];
+      _cachedData.standardsLog = _cachedData.standardsLog || {};
       _cachedData.schemaVersion = SCHEMA_VERSION;
       ensureRecentsSeeded(_cachedData);
+      ensureSfetMigrated(_cachedData);
       return _cachedData;
     }
   } catch (e) {
@@ -1172,9 +1227,20 @@ function loadData() {
     shiftRoster: {},
     favorites: [],
     days: {},
-    recents: { morning: [], arvo: [], dinner: [] }
+    recents: { morning: [], arvo: [], dinner: [] },
+    standardsLog: {},
+    _sfetMigrated: true
   };
   return _cachedData;
+}
+
+// One-time migration: pivot existing users from recomp program to SFET prep.
+// Sets sfetStartDate + targetDate, seeds Sam's known pull-up baseline.
+function ensureSfetMigrated(data) {
+  if (data._sfetMigrated) return;
+  data.meta.sfetStartDate = "2026-09-07";
+  data.meta.targetDate = "2027-03-07";
+  data._sfetMigrated = true;
 }
 
 // Seed per-section recents from existing meal log history so previously-logged
@@ -1232,6 +1298,73 @@ function getSectionRecents(section) {
   const data = loadData();
   const arr = (data.recents && data.recents[section]) || [];
   return arr.slice().sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
+}
+
+// ------------------------------------------------------------------
+// SFET STANDARDS — logging + formatting
+// ------------------------------------------------------------------
+
+function getStandardsLog(id) {
+  const data = loadData();
+  return (data.standardsLog && data.standardsLog[id]) || [];
+}
+
+function getLatestStandard(id) {
+  const arr = getStandardsLog(id);
+  if (!arr.length) return null;
+  return arr.slice().sort((a, b) => a.date.localeCompare(b.date)).slice(-1)[0];
+}
+
+function addStandardEntry(id, entry) {
+  const data = loadData();
+  if (!data.standardsLog) data.standardsLog = {};
+  if (!data.standardsLog[id]) data.standardsLog[id] = [];
+  data.standardsLog[id].push({ date: entry.date, value: entry.value, notes: entry.notes || "" });
+  saveData();
+}
+
+function deleteStandardEntry(id, index) {
+  const data = loadData();
+  if (data.standardsLog && data.standardsLog[id]) {
+    data.standardsLog[id].splice(index, 1);
+    saveData();
+  }
+}
+
+function parseTimeToSeconds(s) {
+  if (s == null || s === "") return null;
+  const str = String(s).trim();
+  if (/^\d+$/.test(str)) return parseInt(str, 10);              // bare seconds
+  const m = str.match(/^(\d+):([0-5]?\d)$/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+function formatSecondsToTime(sec) {
+  if (sec == null || !Number.isFinite(sec)) return "—";
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${s < 10 ? "0" + s : s}`;
+}
+
+function formatStandardValue(id, value) {
+  const spec = SFET_STANDARDS.find(x => x.id === id);
+  if (!spec || value == null) return "—";
+  if (spec.unit === "time") return formatSecondsToTime(value);
+  if (spec.unit === "km")   return value + " km";
+  return value + " reps";
+}
+
+// Percent progress from a chosen baseline (0-reps for higherBetter, standards.min for time)
+// toward the "min" and "comp" thresholds. Used to color a progress bar.
+function standardStatus(id, value) {
+  const spec = SFET_STANDARDS.find(x => x.id === id);
+  if (!spec || value == null) return { label: "not tested", cls: "" };
+  const passesMin  = spec.higherBetter ? value >= spec.min  : value <= spec.min;
+  const passesComp = spec.higherBetter ? value >= spec.comp : value <= spec.comp;
+  if (passesComp) return { label: "competitive", cls: "delta-good" };
+  if (passesMin)  return { label: "meets min",   cls: "delta-warn" };
+  return { label: "below min", cls: "delta-bad" };
 }
 
 function uid() {
@@ -1664,10 +1797,10 @@ function renderTopbar() {
     </div>
     <div class="phase-row">
       ${rx.phase ? `<span class="pill phase-${rx.phase.id}">P${rx.phase.id} ${rx.phase.name}</span>` : ""}
-      ${rx.weekNum > 0 ? `<span class="pill">Wk ${rx.weekNum}/52</span>` : ""}
+      ${rx.weekNum > 0 ? `<span class="pill">Wk ${rx.weekNum}/26</span>` : ""}
       ${rx.meso ? `<span class="pill">Meso ${rx.meso.meso} · Wk ${rx.meso.weekInMeso}/4</span>` : ""}
       ${rx.meso && rx.meso.isDeload ? `<span class="pill deload">Deload</span>` : ""}
-      ${rx.weekType ? `<span class="pill ${rx.weekType}">${rx.weekType === "post-nights" ? "Post-Nights" : rx.weekType === "night" ? "Night Shifts" : "Day Shifts"}</span>` : ""}
+      ${rx.preSfet ? `<span class="pill">Pre-SFET</span>` : ""}
     </div>
   `;
   tb.querySelector('[data-action="prev-day"]').onclick = () => setDate(addDays(iso, -1));
@@ -1685,13 +1818,13 @@ function renderToday() {
   const rx = getPrescriptionForDate(iso, data.meta);
   const day = data.days[iso] || null;
 
-  if (rx.weekNum <= 0) {
+  if (rx.preSfet || rx.weekNum <= 0) {
     app.innerHTML = `
       <div class="card">
-        <h2>Pre-Program</h2>
+        <h2>Pre-SFET Program</h2>
         <p class="muted" style="margin: 8px 0 0;">
-          Your program begins ${formatPrettyDate(data.meta.startDate)}.
-          Use this time to lock in your starting weight.
+          SFET Base phase begins ${formatPrettyDate(data.meta.sfetStartDate || data.meta.startDate)}.
+          Weight and meal logs on this day are still saved — programmed sessions start on the SFET start date.
         </p>
       </div>
       ${renderQuickEntryCard(iso, day)}
@@ -1787,6 +1920,8 @@ function renderSessionCard(iso, s) {
     body += renderLiftBody(iso, s);
   } else if (s.type === "run" || s.type === "swim") {
     body += renderCardioBody(iso, s);
+  } else if (s.type === "ruck") {
+    body += renderRuckBody(iso, s);
   }
   body += `
     <textarea class="notes-input" data-action="session-notes" data-session-id="${s.id}" placeholder="Session notes">${sl.notes || ""}</textarea>
@@ -1817,12 +1952,16 @@ function describeSession(s) {
   }
   if (s.type === "run") {
     const c = s.cardio;
-    if (c.variant === "long")    return `${c.distanceKm}km · ${c.note}`;
-    if (c.variant === "quality") return `${c.durationMin}min · ${c.note}`;
-    if (c.variant === "easy")    return `${c.durationMin}min · ${c.note}`;
+    if (c.variant === "long")      return `${c.distanceKm}km · ${c.note}`;
+    if (c.variant === "threshold") return `${c.durationMin}min @ ${c.paceHint} · ${c.note}`;
+    if (c.variant === "speed")     return `${c.reps} × ${c.distanceM}m @ ${c.paceHint} · ${c.rest} rest`;
+    if (c.variant === "easy")      return `${c.durationMin}min · ${c.note}`;
   }
   if (s.type === "swim") {
-    return `${s.cardio.distanceKm}km · ${s.cardio.note}`;
+    return `${(s.cardio.distanceKm * 1000).toFixed(0)}m · ${s.cardio.note}`;
+  }
+  if (s.type === "ruck") {
+    return `${s.ruck.distanceKm}km @ ${s.ruck.loadKg}kg · ${s.ruck.paceHint}`;
   }
   return "";
 }
@@ -1895,6 +2034,39 @@ function renderCardioBody(iso, s) {
           <input type="number" inputmode="numeric" step="1" min="40" max="220"
                  data-action="set-cardio" data-session-id="${s.id}" data-field="actualHrAvg"
                  value="${log.actualHrAvg != null ? log.actualHrAvg : ""}" placeholder="—">
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderRuckBody(iso, s) {
+  const log = getSessionLog(iso, s.id);
+  const r = s.ruck;
+  return `
+    <div style="padding-top: 12px;">
+      <div style="font-size: 13px; color: var(--muted); margin-bottom: 10px; line-height: 1.5;">
+        Target: <strong>${r.distanceKm}km @ ${r.loadKg}kg</strong> · pace ${r.paceHint}<br>
+        ${r.note}
+      </div>
+      <div class="cardio-log">
+        <div class="field">
+          <label>Distance (km)</label>
+          <input type="number" inputmode="decimal" step="0.1" min="0" max="30"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualDistanceKm"
+                 value="${log.actualDistanceKm != null ? log.actualDistanceKm : ""}" placeholder="${r.distanceKm}">
+        </div>
+        <div class="field">
+          <label>Load (kg)</label>
+          <input type="number" inputmode="decimal" step="0.5" min="0" max="60"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualLoadKg"
+                 value="${log.actualLoadKg != null ? log.actualLoadKg : ""}" placeholder="${r.loadKg}">
+        </div>
+        <div class="field">
+          <label>Time (min)</label>
+          <input type="number" inputmode="numeric" step="1" min="0" max="240"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualDurationMin"
+                 value="${log.actualDurationMin != null ? log.actualDurationMin : ""}" placeholder="—">
         </div>
       </div>
     </div>
@@ -2752,10 +2924,8 @@ function openPrintDialog() {
 
 function buildPrintCalendar() {
   const data = loadData();
-  const start = parseISO(data.meta.startDate);
+  const start = parseISO(data.meta.sfetStartDate || data.meta.startDate);
   const end = parseISO(data.meta.targetDate);
-  // Generate from current calendar month minus 1 month to 12 months ahead by default
-  // Actually use program start month → program end month
   const startY = start.getFullYear(), startM = start.getMonth();
   const endY = end.getFullYear(), endM = end.getMonth();
   let y = startY, m = startM;
@@ -2864,11 +3034,15 @@ function renderSettings() {
       <div class="section-body">
         <div class="card">
           <div class="settings-row">
-            <div class="label">Start date<div class="desc">Day program begins</div></div>
+            <div class="label">Weight tracking start<div class="desc">First weigh-in date</div></div>
             <input type="date" data-setting="startDate" value="${meta.startDate}">
           </div>
           <div class="settings-row">
-            <div class="label">Target date<div class="desc">Goal endpoint</div></div>
+            <div class="label">SFET program start<div class="desc">Monday of Base Wk 1</div></div>
+            <input type="date" data-setting="sfetStartDate" value="${meta.sfetStartDate}">
+          </div>
+          <div class="settings-row">
+            <div class="label">SFET target date<div class="desc">Selection window</div></div>
             <input type="date" data-setting="targetDate" value="${meta.targetDate}">
           </div>
           <div class="settings-row">
@@ -2883,22 +3057,18 @@ function renderSettings() {
             <div class="label">Daily calorie target<div class="desc">kcal — leave blank for none</div></div>
             <input type="number" step="10" min="1000" max="5000" data-setting="dailyCalorieTarget" value="${meta.dailyCalorieTarget != null ? meta.dailyCalorieTarget : ""}" placeholder="—">
           </div>
-          <div class="settings-row">
-            <div class="label">Roster anchor<div class="desc">Monday where cycle starts at "night-2"</div></div>
-            <input type="date" data-setting="rosterAnchor" value="${meta.rosterAnchor}">
-          </div>
         </div>
       </div>
     </details>
 
-    <details class="section">
-      <summary>Shift roster (next 12 weeks)</summary>
+    <details class="section" open>
+      <summary>SFET standards — log tests</summary>
       <div class="section-body">
-        <div style="font-size: 12px; color: var(--muted); margin-bottom: 8px; line-height: 1.5;">
-          Default cycle from roster anchor: <strong>night → night → post-nights → day → day → day</strong>, repeating every 6 weeks.
-          Tap a week to override.
+        <div style="font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.55;">
+          Log a test result whenever you retest. Latest logged value + status shown per standard.
+          Time format: <strong>mm:ss</strong> (e.g. <code>15:30</code>).
         </div>
-        <div class="roster-grid" id="roster-list"></div>
+        <div id="standards-list"></div>
       </div>
     </details>
 
@@ -2931,14 +3101,14 @@ function renderSettings() {
       <summary>About this program</summary>
       <div class="section-body">
         <div style="font-size: 13px; color: var(--muted); line-height: 1.55;">
-          <p>4x lift (upper/lower split) + 3x run + 1x swim + 1x rest. 52 weeks across three phases:</p>
+          <p><strong>SFET prep — 26 weeks.</strong> 3x lift (Upper Push / Upper Pull / Lower Strength) + 4x run (threshold, speed, long, optional easy) + 1x kit swim + 1x ruck march + cadence work as lift finishers.</p>
           <ul style="padding-left: 18px; margin: 8px 0;">
-            <li><strong>Phase 1 Cut</strong> (wks 1-16): hypertrophy 8-12 reps, all easy runs, larger deficit.</li>
-            <li><strong>Phase 2 Fitness</strong> (wks 17-32): strength-hypertrophy 5-8 reps, add tempo runs, smaller deficit.</li>
-            <li><strong>Phase 3 Training</strong> (wks 33-52): strength 3-6 reps, polarized running, minimal deficit.</li>
+            <li><strong>Phase 1 Base</strong> (wks 1-8): rebuild strength (6-10 reps), light ruck (6km/12kg), 20min threshold, 4×400m speed, 200m kit swim.</li>
+            <li><strong>Phase 2 Build</strong> (wks 9-20): strength endurance (5-8 reps), ruck progression to 9km/20kg, 28min threshold, 6×400m speed, 300m kit swim.</li>
+            <li><strong>Phase 3 Peak</strong> (wks 21-26): peak strength (3-6 reps), test-load ruck 11km/28kg @ 8:00/km, 30min threshold, 8×400m @ 3:45/km, 400m kit swim.</li>
           </ul>
-          <p>Mesocycles of 4 weeks: build → build+ → push → deload. Hard sessions front-loaded to Mon/Tue (your days off). Night-shift weeks reduce intensity by ~10%. Post-nights Mondays move the heavy lift to Tuesday.</p>
-          <p>Sources: Helms, Muscle &amp; Strength Pyramid 3e (RPE-based progression); Wilson 2012 meta (concurrent training interference); Schumann 2022 (session order); Knufinke 2018 & Fullagar 2015 (sleep + performance); Seiler (polarized intensity).</p>
+          <p>Cadence push-ups/pull-ups baked into lift days as finishers (3 sets, submax → max as phases progress). Weekly template runs Mon push / Tue threshold+swim / Wed pull / Thu speed / Fri lower / Sat ruck / Sun long run. Deload every 4 weeks (halves volume, backs off intensity).</p>
+          <p>Sources: SOCOMD SFET published standards; Tactical Barbell Green Protocol (concurrent SF prep); Helms, Muscle &amp; Strength Pyramid 3e (RPE progression); Wilson 2012 (concurrent-training interference); Seiler (polarized intensity distribution).</p>
         </div>
       </div>
     </details>
@@ -2960,8 +3130,8 @@ function renderSettings() {
     });
   });
 
-  // Roster
-  renderRoster();
+  // Standards list
+  renderStandardsList();
 
   app.querySelector('[data-action="export-json"]').onclick = exportJson;
   app.querySelector('[data-action="import-json"]').onclick = () => {
@@ -2984,34 +3154,117 @@ function renderSettings() {
   };
 }
 
-function renderRoster() {
-  const list = document.getElementById("roster-list");
+function renderStandardsList() {
+  const list = document.getElementById("standards-list");
   if (!list) return;
-  const data = loadData();
-  const startMon = mondayOf(todayISO());
   let html = "";
-  for (let i = 0; i < 12; i++) {
-    const mon = addDays(startMon, i * 7);
-    const wt = getWeekType(mon, data.meta);
+  for (const spec of SFET_STANDARDS) {
+    const latest = getLatestStandard(spec.id);
+    const status = latest ? standardStatus(spec.id, latest.value) : { label: "not tested", cls: "" };
+    const targetText = spec.unit === "time"
+      ? `min ${formatSecondsToTime(spec.min)} · comp ${formatSecondsToTime(spec.comp)}`
+      : spec.unit === "km"
+        ? `min ${spec.min}km · comp ${spec.comp}km`
+        : `min ${spec.min} reps · comp ${spec.comp}+ reps`;
     html += `
-      <div class="roster-row">
-        <span>${formatPrettyDate(mon).replace(/^\w+ /, "")}</span>
-        <select data-roster-week="${mon}">
-          <option value="day" ${wt === "day" ? "selected" : ""}>Day</option>
-          <option value="night" ${wt === "night" ? "selected" : ""}>Night</option>
-          <option value="post-nights" ${wt === "post-nights" ? "selected" : ""}>Post-N</option>
-        </select>
+      <div class="std-row">
+        <div class="std-head">
+          <div class="std-label">${spec.label}</div>
+          <button class="std-log-btn" data-action="log-std" data-std-id="${spec.id}">+ Log</button>
+        </div>
+        <div class="std-body">
+          <div class="std-current">
+            <div class="std-current-val ${status.cls}">${latest ? formatStandardValue(spec.id, latest.value) : "—"}</div>
+            <div class="std-current-meta">${latest ? formatPrettyDate(latest.date) + " · " + status.label : "no test logged"}</div>
+          </div>
+          <div class="std-target">${targetText}</div>
+        </div>
       </div>
     `;
   }
   list.innerHTML = html;
-  list.querySelectorAll('[data-roster-week]').forEach(sel => {
-    sel.addEventListener("change", () => {
-      const data = loadData();
-      const mon = sel.dataset.rosterWeek;
-      data.shiftRoster[mon] = sel.value;
-      saveData();
-      showToast(`Week of ${mon} set to ${sel.value}`);
+  list.querySelectorAll('[data-action="log-std"]').forEach(btn => {
+    btn.addEventListener("click", () => openStandardModal(btn.dataset.stdId));
+  });
+}
+
+function openStandardModal(stdId) {
+  const spec = SFET_STANDARDS.find(x => x.id === stdId);
+  if (!spec) return;
+  const isTime = spec.unit === "time";
+  const isKm = spec.unit === "km";
+  const inputPlaceholder = isTime ? "mm:ss" : (isKm ? "km" : "reps");
+  const targetLine = isTime
+    ? `Min pass ${formatSecondsToTime(spec.min)} · Competitive ${formatSecondsToTime(spec.comp)}`
+    : isKm
+      ? `Min pass ${spec.min}km · Competitive ${spec.comp}km`
+      : `Min pass ${spec.min} reps · Competitive ${spec.comp}+ reps`;
+
+  const log = getStandardsLog(stdId).slice().sort((a, b) => b.date.localeCompare(a.date));
+  const historyHtml = log.length
+    ? log.map((e, i) => `
+        <div class="std-history-row">
+          <span>${formatPrettyDate(e.date)}</span>
+          <span>${formatStandardValue(stdId, e.value)}</span>
+          <button class="del-btn" data-action="del-std-entry" data-idx="${log.length - 1 - i}">Remove</button>
+        </div>
+      `).join("")
+    : `<div class="muted" style="font-size: 12px; padding: 6px 0;">No tests logged yet.</div>`;
+
+  const html = `
+    <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px; line-height: 1.5;">${targetLine}</div>
+    <div class="form-row">
+      <label>Date</label>
+      <input type="date" id="std-date" value="${todayISO()}">
+    </div>
+    <div class="form-row">
+      <label>Result${isTime ? " (mm:ss)" : ""}</label>
+      <input type="${isTime ? "text" : "number"}" ${isTime ? "" : "inputmode=\"decimal\" step=\"0.1\" min=\"0\""}
+             id="std-value" placeholder="${inputPlaceholder}" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label>Notes (optional)</label>
+      <input type="text" id="std-notes" placeholder="conditions, kit, etc." autocomplete="off">
+    </div>
+    <div class="modal-btn-row">
+      <button class="btn primary" data-action="save-std">Log result</button>
+    </div>
+    ${log.length ? `
+      <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;">
+        <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">History</div>
+        <div class="std-history">${historyHtml}</div>
+      </div>
+    ` : ""}
+  `;
+
+  openModal(spec.label, html, root => {
+    setTimeout(() => root.querySelector("#std-value").focus(), 60);
+
+    root.querySelector('[data-action="save-std"]').addEventListener("click", () => {
+      const date = root.querySelector("#std-date").value;
+      const raw = root.querySelector("#std-value").value.trim();
+      const notes = root.querySelector("#std-notes").value.trim();
+      let value;
+      if (isTime) {
+        value = parseTimeToSeconds(raw);
+        if (value == null) { showToast("Enter time as mm:ss"); return; }
+      } else {
+        value = parseFloat(raw);
+        if (!Number.isFinite(value) || value < 0) { showToast("Enter a valid number"); return; }
+      }
+      if (!date) { showToast("Date required"); return; }
+      addStandardEntry(stdId, { date, value, notes });
+      closeModal();
+      renderStandardsList();
+      showToast("Test logged");
+    });
+
+    root.querySelectorAll('[data-action="del-std-entry"]').forEach(btn => {
+      btn.addEventListener("click", () => {
+        deleteStandardEntry(stdId, parseInt(btn.dataset.idx, 10));
+        openStandardModal(stdId);
+        renderStandardsList();
+      });
     });
   });
 }
