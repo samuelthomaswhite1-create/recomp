@@ -523,6 +523,119 @@
   details.section[open] summary::after { transform: rotate(180deg); }
   details.section .section-body { padding: 12px 4px; }
 
+  /* Macro tracking */
+  .macro-block {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 7px;
+  }
+  .macro-row {
+    display: grid;
+    grid-template-columns: 52px 1fr auto;
+    align-items: center;
+    gap: 10px;
+  }
+  .macro-name {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+  }
+  .macro-bar-track {
+    height: 6px; background: var(--surface-2);
+    border-radius: 999px; overflow: hidden;
+  }
+  .macro-bar-fill {
+    height: 100%; border-radius: 999px;
+    transition: width 0.25s ease;
+  }
+  .macro-bar-fill.over { background: var(--danger) !important; }
+  .macro-val {
+    font-size: 12px; color: var(--text);
+    font-variant-numeric: tabular-nums;
+    min-width: 62px; text-align: right;
+  }
+  .macro-val.over { color: var(--danger); }
+
+  .m-macros {
+    display: block;
+    font-size: 11px; color: var(--dim);
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .fav-item .fi-name { display: block; }
+
+  .macro-toggle-btn {
+    width: 100%;
+    padding: 11px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
+    color: var(--muted);
+    font-weight: 600; font-size: 13px;
+    margin-bottom: 10px;
+  }
+  .macro-toggle-btn:active { background: var(--border); }
+  .macro-toggle-btn[hidden] { display: none !important; }
+  #macro-section[hidden] { display: none !important; }
+  .macro-input-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    margin-bottom: 8px;
+  }
+  .macro-input-grid .field { display: flex; flex-direction: column; gap: 4px; }
+  .macro-input-grid label {
+    font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .macro-input-grid input {
+    font-size: 15px; padding: 9px 6px; text-align: center;
+  }
+  .macro-derived {
+    font-size: 12px; color: var(--muted);
+    min-height: 16px; margin-bottom: 10px;
+  }
+  .macro-derived a {
+    color: var(--accent); text-decoration: underline; cursor: pointer;
+  }
+  .macro-sanity {
+    font-size: 12px; color: var(--muted);
+    line-height: 1.5; margin-top: 10px; padding: 0 2px;
+  }
+  .macro-sanity strong { color: var(--text); }
+
+  /* Toggle switch (settings booleans) */
+  .switch {
+    position: relative; display: inline-block;
+    width: 50px; height: 30px; flex-shrink: 0;
+  }
+  .switch input {
+    position: absolute; opacity: 0;
+    width: 0; height: 0; margin: 0; padding: 0;
+  }
+  .switch .slider {
+    position: absolute; inset: 0;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    transition: background 0.18s, border-color 0.18s;
+  }
+  .switch .slider::before {
+    content: "";
+    position: absolute;
+    height: 22px; width: 22px;
+    left: 3px; top: 3px;
+    background: var(--dim);
+    border-radius: 50%;
+    transition: transform 0.18s, background 0.18s;
+  }
+  .switch input:checked + .slider {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .switch input:checked + .slider::before {
+    transform: translateX(20px);
+    background: #0a0a0a;
+  }
+
   /* Extra sessions */
   .section-heading {
     font-size: 11px;
@@ -887,7 +1000,11 @@ const DEFAULT_META = {
   dailyCalorieTarget: null,
   age: null,
   heightCm: null,
-  sex: "male"
+  sex: "male",
+  macrosEnabled: false,        // Opt-in: off by default so shared users aren't forced into macros
+  proteinTargetG: null,
+  carbTargetG: null,
+  fatTargetG: null
 };
 
 // SFET benchmarks — SOCOMD physical standards
@@ -913,6 +1030,13 @@ const MEAL_SECTIONS = [
   { key: "morning", label: "Morning" },
   { key: "arvo",    label: "Arvo" },
   { key: "dinner",  label: "Dinner" }
+];
+
+// Macro tracking (opt-in via meta.macrosEnabled). Atwater factors: 4/4/9 kcal per gram.
+const MACRO_FIELDS = [
+  { key: "proteinG", label: "Protein", short: "P", target: "proteinTargetG", kcalPerG: 4, color: "var(--aerobic)" },
+  { key: "carbsG",   label: "Carbs",   short: "C", target: "carbTargetG",    kcalPerG: 4, color: "var(--warn)" },
+  { key: "fatG",     label: "Fat",     short: "F", target: "fatTargetG",     kcalPerG: 9, color: "var(--night)" }
 ];
 
 // SFET prep: 26-week block, phases indexed from sfetStartDate (Mon of program week 1).
@@ -1308,7 +1432,7 @@ function ensureRecentsSeeded(data) {
     for (const section of ["morning", "arvo", "dinner"]) {
       const entries = day.meals[section] || [];
       for (const e of entries) {
-        upsertRecent(recents[section], e.name, e.kcal, ts);
+        upsertRecent(recents[section], e, ts);
       }
     }
   }
@@ -1317,24 +1441,27 @@ function ensureRecentsSeeded(data) {
 }
 
 // Dedup key = trimmed, lowercased name. Latest kcal + latest timestamp win.
-function upsertRecent(sectionArr, name, kcal, timestamp) {
-  const clean = (name || "").trim();
+function upsertRecent(sectionArr, entry, timestamp) {
+  const clean = ((entry && entry.name) || "").trim();
   if (!clean) return;
   const key = clean.toLowerCase();
   const existing = sectionArr.find(r => r.name.trim().toLowerCase() === key);
-  if (existing) {
-    existing.name = clean;
-    existing.kcal = kcal;
-    existing.lastUsed = Math.max(existing.lastUsed || 0, timestamp);
-  } else {
-    sectionArr.push({ name: clean, kcal, lastUsed: timestamp });
+  const target = existing || { name: clean, lastUsed: 0 };
+  target.name = clean;
+  target.kcal = entry.kcal;
+  // Carry macros so quick-add from the dropdown reuses them
+  for (const m of MACRO_FIELDS) {
+    if (entry[m.key] != null) target[m.key] = entry[m.key];
+    else delete target[m.key];
   }
+  target.lastUsed = Math.max(target.lastUsed || 0, timestamp);
+  if (!existing) sectionArr.push(target);
 }
 
-function bumpRecent(section, name, kcal, timestamp) {
+function bumpRecent(section, entry, timestamp) {
   const data = loadData();
   if (!data.recents[section]) data.recents[section] = [];
-  upsertRecent(data.recents[section], name, kcal, timestamp || Date.now());
+  upsertRecent(data.recents[section], entry, timestamp || Date.now());
   saveData();
 }
 
@@ -1495,8 +1622,12 @@ function getMealsForDay(iso) {
 
 function addMealEntry(iso, section, entry) {
   const meals = getMealsForDay(iso);
-  meals[section].push({ id: uid(), name: entry.name, kcal: entry.kcal });
-  bumpRecent(section, entry.name, entry.kcal);
+  const rec = { id: uid(), name: entry.name, kcal: entry.kcal };
+  for (const m of MACRO_FIELDS) {
+    if (entry[m.key] != null) rec[m.key] = entry[m.key];
+  }
+  meals[section].push(rec);
+  bumpRecent(section, rec);
   saveData();
 }
 
@@ -1505,9 +1636,48 @@ function updateMealEntry(iso, section, id, patch) {
   const item = meals[section].find(e => e.id === id);
   if (item) {
     Object.assign(item, patch);
-    bumpRecent(section, item.name, item.kcal);
+    // An explicit null in the patch means "macro cleared" — drop the key entirely
+    for (const m of MACRO_FIELDS) {
+      if (patch[m.key] === null) delete item[m.key];
+    }
+    bumpRecent(section, item);
     saveData();
   }
+}
+
+function macrosEnabled() {
+  return loadData().meta.macrosEnabled === true;
+}
+
+function dayMacroTotals(iso) {
+  const meals = getMealsForDay(iso);
+  const t = { proteinG: 0, carbsG: 0, fatG: 0, hasAny: false };
+  for (const s of ["morning", "arvo", "dinner"]) {
+    for (const e of meals[s]) {
+      for (const m of MACRO_FIELDS) {
+        if (e[m.key] != null) { t[m.key] += e[m.key]; t.hasAny = true; }
+      }
+    }
+  }
+  return t;
+}
+
+// Derived calories from whatever macros are present. Null when none are set.
+function kcalFromMacros(entry) {
+  let sum = 0, any = false;
+  for (const m of MACRO_FIELDS) {
+    const v = entry[m.key];
+    if (v != null && Number.isFinite(v)) { sum += v * m.kcalPerG; any = true; }
+  }
+  return any ? Math.round(sum) : null;
+}
+
+function macroSummary(e) {
+  const parts = [];
+  for (const m of MACRO_FIELDS) {
+    if (e[m.key] != null) parts.push(m.short + " " + Math.round(e[m.key]) + "g");
+  }
+  return parts.join(" · ");
 }
 
 function deleteMealEntry(iso, section, id) {
@@ -2393,6 +2563,7 @@ function renderNutrition() {
   const iso = state.currentDate;
   const total = dayTotalKcal(iso);
   const target = data.meta.dailyCalorieTarget;
+  const macroRows = renderMacroRows(iso);
 
   let totalCard = "";
   if (target != null && target > 0) {
@@ -2411,6 +2582,7 @@ function renderNutrition() {
         <div class="kcal-bar-track">
           <div class="kcal-bar-fill ${over ? "over" : ""}" style="width: ${pct}%"></div>
         </div>
+        ${macroRows}
       </div>
     `;
   } else {
@@ -2422,6 +2594,7 @@ function renderNutrition() {
         <div class="no-target-hint">
           No daily target set. <a data-action="go-settings">Set one in Settings</a> to see remaining budget and a progress bar.
         </div>
+        ${macroRows}
       </div>
     `;
   }
@@ -2432,21 +2605,26 @@ function renderNutrition() {
     const secTotal = sectionTotalKcal(iso, sec.key);
     const recents = getSectionRecents(sec.key);
 
+    const showMacros = macrosEnabled();
     const entriesHtml = entries.length
-      ? entries.map(e => `
+      ? entries.map(e => {
+          const ms = showMacros ? macroSummary(e) : "";
+          return `
           <div class="meal-entry" data-action="edit-entry" data-section="${sec.key}" data-entry-id="${e.id}">
-            <div class="m-name">${escapeHtml(e.name)}</div>
+            <div class="m-name">${escapeHtml(e.name)}${ms ? `<span class="m-macros">${ms}</span>` : ""}</div>
             <div class="m-kcal">${e.kcal} kcal</div>
-          </div>
-        `).join("")
+          </div>`;
+        }).join("")
       : `<div class="meal-empty">No entries yet</div>`;
 
-    const favsMenuItems = recents.map(r => `
-      <button class="fav-item" data-action="add-recent" data-section="${sec.key}" data-name="${escapeHtml(r.name)}" data-kcal="${r.kcal}">
-        <span class="fi-name">${escapeHtml(r.name)}</span>
+    const favsMenuItems = recents.map(r => {
+      const ms = showMacros ? macroSummary(r) : "";
+      return `
+      <button class="fav-item" data-action="add-recent" data-section="${sec.key}" data-recent="${escapeHtml(JSON.stringify(r))}">
+        <span class="fi-name">${escapeHtml(r.name)}${ms ? `<span class="m-macros">${ms}</span>` : ""}</span>
         <span class="fi-kcal">${r.kcal} kcal</span>
-      </button>
-    `).join("");
+      </button>`;
+    }).join("");
 
     const favsButton = recents.length
       ? `<button class="favs-btn" data-action="toggle-favs" data-section="${sec.key}">
@@ -2496,16 +2674,45 @@ function renderNutrition() {
   // Tap a recent → log it into that section
   app.querySelectorAll('[data-action="add-recent"]').forEach(btn => {
     btn.addEventListener("click", () => {
-      const name = btn.dataset.name;
-      const kcal = parseInt(btn.dataset.kcal, 10);
-      addMealEntry(iso, btn.dataset.section, { name, kcal });
+      let r;
+      try { r = JSON.parse(btn.dataset.recent); } catch (e) { return; }
+      const entry = { name: r.name, kcal: r.kcal };
+      for (const m of MACRO_FIELDS) {
+        if (r[m.key] != null) entry[m.key] = r[m.key];
+      }
+      addMealEntry(iso, btn.dataset.section, entry);
       renderNutrition();
-      showToast(`${name} added`);
+      showToast(`${r.name} added`);
     });
   });
 
   const gs = app.querySelector('[data-action="go-settings"]');
   if (gs) gs.addEventListener("click", () => setView("settings"));
+}
+
+function renderMacroRows(iso) {
+  if (!macrosEnabled()) return "";
+  const meta = loadData().meta;
+  const totals = dayMacroTotals(iso);
+  const anyTarget = MACRO_FIELDS.some(m => meta[m.target] != null && meta[m.target] > 0);
+  if (!totals.hasAny && !anyTarget) return "";
+  let rows = "";
+  for (const m of MACRO_FIELDS) {
+    const val = Math.round(totals[m.key]);
+    const target = meta[m.target];
+    const hasTarget = target != null && target > 0;
+    const pct = hasTarget ? Math.min(100, Math.round(val / target * 100)) : 0;
+    const over = hasTarget && val > target;
+    rows += `
+      <div class="macro-row">
+        <div class="macro-name">${m.label}</div>
+        <div class="macro-bar-track">
+          <div class="macro-bar-fill${over ? " over" : ""}" style="width:${pct}%;background:${m.color}"></div>
+        </div>
+        <div class="macro-val${over ? " over" : ""}">${val}${hasTarget ? " / " + target : ""}g</div>
+      </div>`;
+  }
+  return `<div class="macro-block">${rows}</div>`;
 }
 
 function escapeHtml(s) {
@@ -2518,6 +2725,8 @@ function escapeHtml(s) {
 function openMealEntryModal(iso, section, editEntryId) {
   const editing = editEntryId ? getMealsForDay(iso)[section].find(e => e.id === editEntryId) : null;
   const secLabel = MEAL_SECTIONS.find(s => s.key === section).label;
+  const showMacros = macrosEnabled();
+  const hasMacros = !!(editing && MACRO_FIELDS.some(m => editing[m.key] != null));
   const html = `
     <div class="form-row">
       <label>Food name</label>
@@ -2528,23 +2737,80 @@ function openMealEntryModal(iso, section, editEntryId) {
       <input type="number" inputmode="numeric" step="1" min="0" max="5000"
              id="meal-kcal" value="${editing ? editing.kcal : ""}" placeholder="kcal">
     </div>
+    ${showMacros ? `
+      <button class="macro-toggle-btn" data-action="toggle-macros" ${hasMacros ? "hidden" : ""}>+ Add macros</button>
+      <div id="macro-section" ${hasMacros ? "" : "hidden"}>
+        <div class="macro-input-grid">
+          ${MACRO_FIELDS.map(m => `
+            <div class="field">
+              <label>${m.label} (g)</label>
+              <input type="number" inputmode="decimal" step="0.1" min="0" max="999"
+                     data-macro="${m.key}"
+                     value="${editing && editing[m.key] != null ? editing[m.key] : ""}" placeholder="-">
+            </div>
+          `).join("")}
+        </div>
+        <div class="macro-derived" id="macro-derived"></div>
+      </div>
+    ` : ""}
     <div class="modal-btn-row">
       ${editing ? `<button class="btn danger" data-action="delete-entry">Delete</button>` : ""}
       <button class="btn primary" data-action="save-entry">${editing ? "Save" : "Add to " + secLabel}</button>
     </div>
   `;
   openModal(editing ? `Edit — ${secLabel}` : `Add to ${secLabel}`, html, root => {
-    setTimeout(() => root.querySelector("#meal-name").focus(), 60);
+    setTimeout(() => { const el = root.querySelector("#meal-name"); if (el) el.focus(); }, 60);
+
+    const macroSection = root.querySelector("#macro-section");
+    const macroToggle  = root.querySelector('[data-action="toggle-macros"]');
+
+    function readMacroInputs() {
+      const out = {};
+      if (!macroSection) return out;
+      macroSection.querySelectorAll("[data-macro]").forEach(inp => {
+        const v = inp.value === "" ? null : parseFloat(inp.value);
+        out[inp.dataset.macro] = Number.isFinite(v) ? v : null;
+      });
+      return out;
+    }
+
+    function refreshDerived() {
+      const d = root.querySelector("#macro-derived");
+      if (!d) return;
+      const k = kcalFromMacros(readMacroInputs());
+      d.innerHTML = k == null ? "" :
+        `= <strong>${k} kcal</strong> from macros &middot; <a data-action="use-derived">use this</a>`;
+      const useBtn = d.querySelector('[data-action="use-derived"]');
+      if (useBtn) useBtn.addEventListener("click", () => {
+        root.querySelector("#meal-kcal").value = k;
+      });
+    }
+
+    if (macroToggle && macroSection) {
+      macroToggle.addEventListener("click", () => {
+        macroSection.removeAttribute("hidden");
+        macroToggle.setAttribute("hidden", "");
+        const first = macroSection.querySelector("[data-macro]");
+        if (first) first.focus();
+      });
+    }
+    if (macroSection) {
+      macroSection.querySelectorAll("[data-macro]").forEach(inp => {
+        inp.addEventListener("input", refreshDerived);
+      });
+      refreshDerived();
+    }
 
     root.querySelector('[data-action="save-entry"]').addEventListener("click", () => {
       const name = root.querySelector("#meal-name").value.trim();
       const kcal = parseInt(root.querySelector("#meal-kcal").value, 10);
       if (!name) { showToast("Name required"); return; }
       if (!Number.isFinite(kcal) || kcal < 0) { showToast("Enter calories"); return; }
+      const payload = Object.assign({ name, kcal }, readMacroInputs());
       if (editing) {
-        updateMealEntry(iso, section, editEntryId, { name, kcal });
+        updateMealEntry(iso, section, editEntryId, payload);
       } else {
-        addMealEntry(iso, section, { name, kcal });
+        addMealEntry(iso, section, payload);
       }
       closeModal();
       renderNutrition();
@@ -3375,6 +3641,40 @@ function renderSettings() {
       </div>
     </details>
 
+    <details class="section">
+      <summary>Macro tracking</summary>
+      <div class="section-body">
+        <div class="card">
+          <div class="settings-row">
+            <div class="label">Track macros<div class="desc">Adds protein / carbs / fat to food logging</div></div>
+            <label class="switch">
+              <input type="checkbox" data-setting-bool="macrosEnabled" ${meta.macrosEnabled ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
+          </div>
+          ${meta.macrosEnabled ? `
+            <div class="settings-row">
+              <div class="label">Protein target<div class="desc">grams/day</div></div>
+              <input type="number" step="1" min="0" max="500" data-setting="proteinTargetG" value="${meta.proteinTargetG != null ? meta.proteinTargetG : ""}" placeholder="-">
+            </div>
+            <div class="settings-row">
+              <div class="label">Carb target<div class="desc">grams/day</div></div>
+              <input type="number" step="1" min="0" max="800" data-setting="carbTargetG" value="${meta.carbTargetG != null ? meta.carbTargetG : ""}" placeholder="-">
+            </div>
+            <div class="settings-row">
+              <div class="label">Fat target<div class="desc">grams/day</div></div>
+              <input type="number" step="1" min="0" max="300" data-setting="fatTargetG" value="${meta.fatTargetG != null ? meta.fatTargetG : ""}" placeholder="-">
+            </div>
+          ` : ""}
+        </div>
+        ${meta.macrosEnabled ? `<div class="macro-sanity">${macroTargetSanity(meta)}</div>` : `
+          <p class="muted" style="font-size:12px;margin:10px 2px 0;line-height:1.5;">
+            Off by default. Turn it on to get an <strong>+ Add macros</strong> button when logging food,
+            plus protein/carb/fat totals on the Food tab. Leave it off and nothing changes.
+          </p>`}
+      </div>
+    </details>
+
     <details class="section" open>
       <summary>SFET standards — log tests</summary>
       <div class="section-body">
@@ -3434,11 +3734,19 @@ function renderSettings() {
       const key = inp.dataset.setting;
       let v = e.target.value;
       if (["startWeightKg","targetWeightKg"].includes(key)) v = parseFloat(v);
-      if (["dailyCalorieTarget","age","heightCm"].includes(key)) {
+      if (["dailyCalorieTarget","age","heightCm","proteinTargetG","carbTargetG","fatTargetG"].includes(key)) {
         v = v === "" ? null : parseInt(v, 10);
         if (v != null && !Number.isFinite(v)) v = null;
       }
       meta[key] = v;
+      saveData();
+      render();
+    });
+  });
+
+  app.querySelectorAll('[data-setting-bool]').forEach(inp => {
+    inp.addEventListener("change", () => {
+      meta[inp.dataset.settingBool] = inp.checked;
       saveData();
       render();
     });
@@ -3466,6 +3774,25 @@ function renderSettings() {
       showToast("All data erased");
     }
   };
+}
+
+// Cross-check macro targets against the kcal target so the two can't silently disagree.
+function macroTargetSanity(meta) {
+  const derived = kcalFromMacros({
+    proteinG: meta.proteinTargetG, carbsG: meta.carbTargetG, fatG: meta.fatTargetG
+  });
+  if (derived == null) return "Set all three targets to cross-check them against your calorie target.";
+  const kcalTarget = meta.dailyCalorieTarget;
+  if (kcalTarget == null || kcalTarget <= 0) {
+    return "Macro targets come to <strong>" + derived + " kcal</strong>. No daily calorie target set to compare against.";
+  }
+  const diff = derived - kcalTarget;
+  if (Math.abs(diff) <= 50) {
+    return "Macro targets come to <strong>" + derived + " kcal</strong> - matches your " + kcalTarget + " kcal target.";
+  }
+  return "Macro targets come to <strong>" + derived + " kcal</strong>, which is " +
+         Math.abs(diff) + " kcal " + (diff > 0 ? "above" : "below") +
+         " your " + kcalTarget + " kcal target. Adjust one or the other.";
 }
 
 function renderStandardsList() {
@@ -3552,7 +3879,7 @@ function openStandardModal(stdId) {
   `;
 
   openModal(spec.label, html, root => {
-    setTimeout(() => root.querySelector("#std-value").focus(), 60);
+    setTimeout(() => { const el = root.querySelector("#std-value"); if (el) el.focus(); }, 60);
 
     root.querySelector('[data-action="save-std"]').addEventListener("click", () => {
       const date = root.querySelector("#std-date").value;

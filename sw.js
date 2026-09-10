@@ -1,6 +1,6 @@
 // Recomp Tracker service worker
 // Bump CACHE_VERSION when you upload a new index.html so phones pick up the change.
-const CACHE_VERSION = "recomp-v6";
+const CACHE_VERSION = "recomp-v7";
 const ASSETS = ["./", "./index.html"];
 
 self.addEventListener("install", event => {
