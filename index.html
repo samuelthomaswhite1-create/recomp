@@ -37,11 +37,14 @@
     font-size: 16px; line-height: 1.4;
     overscroll-behavior: none;
     -webkit-font-smoothing: antialiased;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
   body {
     min-height: 100vh;
     padding-top: var(--safe-top);
-    padding-bottom: calc(72px + var(--safe-bottom));
+    /* --nav-h is measured from the real tab bar at runtime (syncNavHeight) */
+    padding-bottom: calc(var(--nav-h, 72px) + 10px);
   }
   button {
     font: inherit; color: inherit;
@@ -254,20 +257,45 @@
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-top: 1px solid var(--border);
-    display: grid; grid-template-columns: repeat(6, 1fr);
-    padding: 8px 1px calc(8px + var(--safe-bottom));
+    display: grid;
+    /* minmax(0,...) is load-bearing: a bare 1fr takes a content-based minimum,
+       so a long label widens its column and wraps the whole bar onto two rows. */
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    padding: 7px 2px calc(7px + var(--safe-bottom));
     z-index: 20;
   }
   nav.tabs button {
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
-    padding: 6px 1px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    min-width: 0;                     /* allow the grid item to shrink */
+    padding: 5px 1px;
     color: var(--dim);
-    font-size: 8.5px; font-weight: 600;
+    font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.01em;
     border-radius: 10px;
+    overflow: hidden;
   }
-  nav.tabs button .icon { font-size: 18px; }
+  nav.tabs button > span {
+    display: block;
+    max-width: 100%;
+    white-space: nowrap;              /* never wrap to a second line */
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  nav.tabs button[hidden] { display: none !important; }
+  nav.tabs button .icon { line-height: 1; }
   nav.tabs button.active { color: var(--accent); }
+
+  /* Label and icon scale with how many tabs are actually showing */
+  nav.tabs[data-count="4"] button { font-size: 10px; }
+  nav.tabs[data-count="4"] button .icon { font-size: 21px; }
+  nav.tabs[data-count="5"] button { font-size: 9.5px; }
+  nav.tabs[data-count="5"] button .icon { font-size: 20px; }
+  nav.tabs[data-count="6"] button { font-size: 8.5px; letter-spacing: 0; }
+  nav.tabs[data-count="6"] button .icon { font-size: 18px; }
+  @media (max-width: 360px) {
+    nav.tabs[data-count="6"] button { font-size: 7.5px; }
+    nav.tabs[data-count="6"] button .icon { font-size: 17px; }
+  }
 
   /* Stats view */
   .stat-grid {
@@ -1005,7 +1033,7 @@
   /* Toast */
   .toast {
     position: fixed;
-    bottom: calc(80px + var(--safe-bottom));
+    bottom: calc(var(--nav-h, 72px) + 12px);
     left: 50%; transform: translateX(-50%);
     background: var(--surface-2);
     border: 1px solid var(--border);
@@ -1079,6 +1107,7 @@ const DEFAULT_META = {
   carbTargetG: null,
   fatTargetG: null,
   predictorEnabled: true,      // Predictor tab can be hidden to slim the tab bar
+  foodEnabled: true,           // Food tab likewise - core tabs stay, these two are optional
   // Targets flex with the day's training demand: lifting wants protein, rucking wants carbs.
   macroProfiles: {
     lift:      { kcal: 2600, proteinG: 170, carbsG: 310, fatG: 75 },
@@ -1576,6 +1605,7 @@ function ensurePhase2Migrated(data) {
     data.meta.macroProfiles = JSON.parse(JSON.stringify(DEFAULT_META.macroProfiles));
   }
   if (data.meta.predictorEnabled == null) data.meta.predictorEnabled = true;
+  if (data.meta.foodEnabled == null) data.meta.foodEnabled = true;
   data._phase2Migrated = true;
 }
 
@@ -3895,6 +3925,13 @@ function renderSettings() {
       <div class="section-body">
         <div class="card">
           <div class="settings-row">
+            <div class="label">Food tab<div class="desc">Meal logging, macros, daily totals</div></div>
+            <label class="switch">
+              <input type="checkbox" data-setting-bool="foodEnabled" ${meta.foodEnabled !== false ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="settings-row">
             <div class="label">Predictor tab<div class="desc">Predicted vs actual weekly loss</div></div>
             <label class="switch">
               <input type="checkbox" data-setting-bool="predictorEnabled" ${meta.predictorEnabled !== false ? "checked" : ""}>
@@ -3903,7 +3940,9 @@ function renderSettings() {
           </div>
         </div>
         <p class="muted" style="font-size:12px;margin:10px 2px 0;line-height:1.5;">
-          Turn off to slim the tab bar. Only earns its place while you're calorie tracking toward a deficit.
+          Switching either off removes it from the bottom bar and the remaining tabs resize to fill the row.
+          Today, Stats, Calendar and Settings always stay. Logged data is kept either way &mdash; turning a tab
+          back on shows everything again.
         </p>
       </div>
     </details>
@@ -4242,19 +4281,48 @@ function importJson(jsonText) {
 // MAIN RENDER
 // ------------------------------------------------------------------
 
+// Tabs the user can switch off. Today / Stats / Calendar / Settings always stay.
+const OPTIONAL_TABS = {
+  predictor: "predictorEnabled",
+  nutrition: "foodEnabled"
+};
+
+function tabIsHidden(view, meta) {
+  const flag = OPTIONAL_TABS[view];
+  return !!flag && meta[flag] === false;
+}
+
 function applyTabVisibility() {
   const meta = loadData().meta;
   const nav = document.querySelector("nav.tabs");
   if (!nav) return;
-  const predBtn = nav.querySelector('button[data-view="predictor"]');
-  if (predBtn) predBtn.hidden = (meta.predictorEnabled === false);
+  nav.querySelectorAll("button").forEach(b => {
+    b.hidden = tabIsHidden(b.dataset.view, meta);
+  });
   const shown = Array.from(nav.querySelectorAll("button")).filter(b => !b.hidden).length;
-  nav.style.gridTemplateColumns = "repeat(" + shown + ", 1fr)";
+  nav.style.gridTemplateColumns = "repeat(" + shown + ", minmax(0, 1fr))";
+  nav.dataset.count = shown;
+  syncNavHeight();
 }
+
+// Feed the tab bar's real height back into the layout so content never sits under it.
+function syncNavHeight() {
+  const nav = document.querySelector("nav.tabs");
+  if (!nav) return;
+  const apply = () => {
+    const h = nav.offsetHeight;
+    if (h > 0) document.documentElement.style.setProperty("--nav-h", h + "px");
+  };
+  apply();                       // sync: rAF is paused while the page is backgrounded
+  requestAnimationFrame(apply);  // refine once layout has settled
+}
+
+window.addEventListener("resize", syncNavHeight);
+window.addEventListener("orientationchange", syncNavHeight);
 
 function render() {
   // Don't strand the user on a tab they just turned off
-  if (state.view === "predictor" && loadData().meta.predictorEnabled === false) {
+  if (tabIsHidden(state.view, loadData().meta)) {
     state.view = "today";
     document.querySelectorAll("nav.tabs button").forEach(b =>
       b.classList.toggle("active", b.dataset.view === "today"));
