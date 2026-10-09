@@ -1223,7 +1223,7 @@ const LIFT_TEMPLATES = {
       { name: "Overhead Press",    role: "secondaryLift", key: "ohp" },
       { name: "Weighted Dips",     role: "accessory",     key: "dips" },
       { name: "Cadence Push-ups",  role: "cadence",       key: "cadence-pushups", unit: "reps" },
-      { name: "Dead Bug",          role: "core",          key: "dead-bug",  unit: "reps" },
+      { name: "Dead Bug",          role: "core",          key: "dead-bug",  unit: "reps", perSide: true },
       { name: "Ab Wheel Rollout",  role: "core",          key: "ab-wheel",  unit: "reps" }
     ]
   },
@@ -1235,8 +1235,8 @@ const LIFT_TEMPLATES = {
       { name: "Barbell Row",       role: "secondaryLift", key: "barbell-row" },
       { name: "Cable Row",         role: "accessory",     key: "cable-row" },
       { name: "Cadence Pull-ups",  role: "cadence",       key: "cadence-pullups", unit: "reps" },
-      { name: "Pallof Press",      role: "core",          key: "pallof",         unit: "reps" },
-      { name: "Suitcase Carry",    role: "core",          key: "suitcase-carry", unit: "meters" }
+      { name: "Pallof Press",      role: "core",          key: "pallof",         unit: "reps", perSide: true },
+      { name: "Suitcase Carry",    role: "core",          key: "suitcase-carry", unit: "meters", low: 20, high: 40, perSide: true }
     ]
   },
   "lower-strength": {
@@ -1246,9 +1246,9 @@ const LIFT_TEMPLATES = {
       { name: "Back Squat",            role: "mainLift",      key: "back-squat" },
       { name: "Deadlift",              role: "secondaryLift", key: "deadlift" },
       { name: "Bulgarian Split Squat", role: "accessory",     key: "bss" },
-      { name: "Farmer's Carry",        role: "accessory",     key: "farmers-carry", unit: "meters" },
-      { name: "Side Plank",            role: "core",          key: "side-plank", unit: "seconds" },
-      { name: "Bird Dog",              role: "core",          key: "bird-dog",   unit: "reps" }
+      { name: "Farmer's Carry",        role: "accessory",     key: "farmers-carry", unit: "meters", low: 30, high: 50 },
+      { name: "Side Plank",            role: "core",          key: "side-plank", unit: "seconds", low: 30, high: 45, perSide: true },
+      { name: "Bird Dog",              role: "core",          key: "bird-dog",   unit: "reps", perSide: true }
     ]
   },
   "upper-hyp": {
@@ -1464,14 +1464,19 @@ function getPrescriptionForDate(iso, meta) {
           };
         }
         const role = rx[ex.role];
+        // Time- and distance-based work can't use the role's rep range (an 8-second
+        // plank or an 8-metre carry is meaningless), so the exercise supplies its own.
+        const low  = ex.low  != null ? ex.low  : role.repsLow;
+        const high = ex.high != null ? ex.high : role.repsHigh;
         const sets = setsForWeekInMeso(mesoInfo.weekInMeso, role.sets);
-        const reps = repsForWeekInMeso(mesoInfo.weekInMeso, role.repsLow, role.repsHigh);
+        const reps = repsForWeekInMeso(mesoInfo.weekInMeso, low, high);
         const rpe = rpeForWeekInMeso(mesoInfo.weekInMeso, role.baseRpe);
         return {
           name: ex.name, key: ex.key, role: ex.role,
           unit: ex.unit || "kg",
+          perSide: !!ex.perSide,
           sets, reps, rpe,
-          repsRange: `${role.repsLow}-${role.repsHigh}`
+          repsRange: `${low}-${high}`
         };
       });
     } else if (s.type === "run") {
@@ -2513,12 +2518,13 @@ function renderLiftBody(iso, s) {
       ? suggestWeight(ex.key, ex.reps, ex.rpe, ex.role, iso) : null;
     const rpeStr = typeof ex.rpe === "number"
       ? ex.rpe.toFixed(1).replace(/\.0$/, "") : ex.rpe;
+    const side = ex.perSide ? " each side" : "";
     const targetLabel =
         ex.role === "erg"            ? `${ex.reps} min`
-      : ex.unit === "seconds"        ? `${ex.sets} × ${ex.reps}s`
-      : ex.unit === "meters"         ? `${ex.sets} × ${ex.reps}m`
+      : ex.unit === "seconds"        ? `${ex.sets} × ${ex.reps}s hold${side}`
+      : ex.unit === "meters"         ? `${ex.sets} × ${ex.reps}m${side}`
       : typeof ex.reps === "string"  ? `${ex.sets} × ${ex.reps}`
-      : `${ex.sets} × ${ex.reps} reps @ RPE ${rpeStr}`;
+      : `${ex.sets} × ${ex.reps} reps${side} @ RPE ${rpeStr}`;
     const badge =
         ex.role === "core" ? `<span class="ex-badge core">Core</span>`
       : ex.role === "hyp"  ? `<span class="ex-badge hyp">Hypertrophy</span>`
@@ -2534,9 +2540,12 @@ function renderLiftBody(iso, s) {
         ${ex.note ? `<div class="ex-note">${ex.note}</div>` : ""}
         ${ex.unit !== "seconds" && suggested ? `<div class="suggested">Suggested: ${suggested}kg</div>` : ""}
         <div class="set-row header">
-          <span>#</span><span>${ex.unit === "minutes" ? "Min" : "Reps"}</span><span>${
-            ex.unit === "seconds" ? "Sec" : ex.unit === "meters" ? "m" :
-            ex.unit === "minutes" ? "—"   : ex.unit === "reps"   ? "—" : "kg"
+          <span>#</span><span>${
+            ex.unit === "seconds" ? "Sec" : ex.unit === "meters" ? "Metres" :
+            ex.unit === "minutes" ? "Min" : "Reps"
+          }</span><span>${
+            ex.unit === "minutes" ? "—" :
+            (ex.unit === "seconds" || ex.unit === "reps") ? "+kg" : "kg"
           }</span><span>RPE</span><span></span>
         </div>
     `;
