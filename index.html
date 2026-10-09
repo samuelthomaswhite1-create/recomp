@@ -523,6 +523,79 @@
   details.section[open] summary::after { transform: rotate(180deg); }
   details.section .section-body { padding: 12px 4px; }
 
+  /* Exercise role badges + notes */
+  .ex-badge {
+    display: inline-block;
+    margin-left: 7px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 9px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    vertical-align: middle;
+  }
+  .ex-badge.core { background: rgba(250,204,21,0.16); color: var(--warn); }
+  .ex-badge.hyp  { background: rgba(167,139,250,0.18); color: var(--night); }
+  .ex-badge.erg  { background: rgba(96,165,250,0.16); color: var(--aerobic); }
+  .ex-note {
+    font-size: 11px; color: var(--dim);
+    margin: -4px 0 8px; line-height: 1.4;
+  }
+
+  /* Ruck form cues */
+  .ruck-cues { margin-bottom: 12px; }
+  .ruck-cues summary {
+    cursor: pointer; list-style: none;
+    font-size: 12px; font-weight: 600;
+    color: var(--warn);
+    padding: 9px 12px;
+    background: rgba(250,204,21,0.08);
+    border: 1px solid rgba(250,204,21,0.3);
+    border-radius: 10px;
+  }
+  .ruck-cues summary::-webkit-details-marker { display: none; }
+  .ruck-cues summary::after { content: " \25BE"; color: var(--dim); }
+  .ruck-cues[open] summary::after { content: " \25B4"; }
+  .ruck-cues ul {
+    margin: 8px 0 0; padding-left: 20px;
+    font-size: 12px; color: var(--muted); line-height: 1.55;
+  }
+  .ruck-cues li { margin-bottom: 5px; }
+
+  /* Per-day macro profile editor */
+  .macro-daytype {
+    font-size: 10px; color: var(--dim);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    font-weight: 700; margin-bottom: 2px;
+  }
+  .profile-editor { display: flex; flex-direction: column; gap: 8px; }
+  .profile-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 11px 12px;
+  }
+  .profile-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 8px; gap: 8px;
+  }
+  .profile-name { font-size: 13px; font-weight: 700; }
+  .profile-derived {
+    font-size: 11px; color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .profile-derived.warn { color: var(--warn); }
+  .profile-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+  }
+  .profile-grid .field { display: flex; flex-direction: column; gap: 3px; }
+  .profile-grid label {
+    font-size: 9px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em; text-align: center;
+  }
+  .profile-grid input {
+    font-size: 14px; padding: 8px 4px; text-align: center; width: 100%;
+  }
+
   /* Macro tracking */
   .macro-block {
     margin-top: 12px;
@@ -1002,9 +1075,16 @@ const DEFAULT_META = {
   heightCm: null,
   sex: "male",
   macrosEnabled: false,        // Opt-in: off by default so shared users aren't forced into macros
-  proteinTargetG: null,
+  proteinTargetG: null,        // Legacy flat targets - superseded by macroProfiles
   carbTargetG: null,
-  fatTargetG: null
+  fatTargetG: null,
+  predictorEnabled: true,      // Predictor tab can be hidden to slim the tab bar
+  // Targets flex with the day's training demand: lifting wants protein, rucking wants carbs.
+  macroProfiles: {
+    lift:      { kcal: 2600, proteinG: 170, carbsG: 310, fatG: 75 },
+    endurance: { kcal: 2800, proteinG: 155, carbsG: 365, fatG: 78 },
+    recovery:  { kcal: 2400, proteinG: 165, carbsG: 260, fatG: 76 }
+  }
 };
 
 // SFET benchmarks — SOCOMD physical standards
@@ -1049,43 +1129,60 @@ const PHASES = [
 // Each mesocycle = 4 weeks (build → build+ → push → deload).
 // Reps + intensity + endurance targets scale per phase to SFET peak.
 const PHASE_PRESCRIPTION = {
-  1: {  // BASE (weeks 1-8) — rebuild strength, condition to load
-    mainLift:      { repsLow: 6, repsHigh: 10, sets: 4, baseRpe: 7 },
-    secondaryLift: { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 7 },
-    accessory:     { repsLow: 8, repsHigh: 12, sets: 3, baseRpe: 7 },
-    cadence:       { sets: 3, pct: 0.6, note: "3 × ~60% of your current max — build volume" },
+  1: {  // BASE (weeks 1-8) - rebuild strength, condition to load
+    mainLift:      { repsLow: 6, repsHigh: 10, sets: 4, baseRpe: 8 },
+    secondaryLift: { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 8 },
+    accessory:     { repsLow: 8, repsHigh: 12, sets: 3, baseRpe: 8 },
+    hyp:           { repsLow: 10, repsHigh: 15, sets: 3, baseRpe: 8 },
+    core:          { repsLow: 8,  repsHigh: 12, sets: 3, baseRpe: 7 },
+    cadence:       { sets: 3, pct: 0.6, note: "3 x ~60% of your current max - build volume" },
+    erg:           { durationMin: 15, note: "15 min steady, conversational" },
     longRun:       { distanceKm: 10, type: "easy",       note: "Z2 / conversational" },
     easyRun:       { durationMin: 30, note: "Z2 recovery" },
     thresholdRun:  { durationMin: 20, paceHint: "~4:45/km", note: "20 min continuous at threshold" },
-    speedIntervals:{ reps: 4, distanceM: 400, paceHint: "4:00/km", rest: "2 min jog", note: "4 × 400m, 2 min jog recovery" },
-    ruck:          { distanceKm: 6,  loadKg: 12, paceHint: "9:00/km", note: "Get used to the pack; pace doesn't matter yet" },
+    speedIntervals:{ reps: 4, distanceM: 400, paceHint: "4:00/km", rest: "2 min jog", note: "4 x 400m, 2 min jog recovery" },
+    ruck:          { distanceKm: 6,  loadKg: 10, paceHint: "9:30/km", note: "Brisk walk only - never jog under load. Build the habit, not the pace." },
     swim:          { distanceKm: 0.3, kit: false, note: "Technique + 200m + 2min tread" }
   },
-  2: {  // BUILD (weeks 9-20) — strength endurance, ruck load progression
-    mainLift:      { repsLow: 5, repsHigh: 8,  sets: 4, baseRpe: 8 },
+  2: {  // BUILD (weeks 9-20) - strength endurance, ruck load progression
+    mainLift:      { repsLow: 5, repsHigh: 8,  sets: 4, baseRpe: 8.5 },
     secondaryLift: { repsLow: 5, repsHigh: 8,  sets: 3, baseRpe: 8 },
-    accessory:     { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 7 },
-    cadence:       { sets: 3, pct: 0.7, note: "3 × ~70% of PR — push volume close to failure" },
+    accessory:     { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 8 },
+    hyp:           { repsLow: 8, repsHigh: 12, sets: 3, baseRpe: 8.5 },
+    core:          { repsLow: 10, repsHigh: 15, sets: 3, baseRpe: 7 },
+    cadence:       { sets: 3, pct: 0.7, note: "3 x ~70% of PR - push volume close to failure" },
+    erg:           { durationMin: 18, note: "5 x 500m hard, 90s easy paddle between" },
     longRun:       { distanceKm: 13, type: "progressive", note: "Easy start, last 20% at goal pace" },
     easyRun:       { durationMin: 35, note: "Z2 recovery" },
-    thresholdRun:  { durationMin: 28, paceHint: "~4:35/km", note: "25-30 min at threshold, or 2 × 15 min with 3 min jog" },
-    speedIntervals:{ reps: 6, distanceM: 400, paceHint: "3:50/km", rest: "90s jog", note: "6 × 400m at 2.4km target pace" },
-    ruck:          { distanceKm: 9,  loadKg: 20, paceHint: "8:30/km", note: "Approaching test load; hold target pace" },
-    swim:          { distanceKm: 0.4, kit: true,  note: "300m in kit + 2min tread — time yourself" }
+    thresholdRun:  { durationMin: 28, paceHint: "~4:35/km", note: "25-30 min at threshold, or 2 x 15 min with 3 min jog" },
+    speedIntervals:{ reps: 6, distanceM: 400, paceHint: "3:50/km", rest: "90s jog", note: "6 x 400m at 2.4km target pace" },
+    ruck:          { distanceKm: 9,  loadKg: 18, paceHint: "9:00/km", note: "Approaching test load. Walk it - if you are jogging, the load is too light or the pace too high." },
+    swim:          { distanceKm: 0.4, kit: true,  note: "300m in kit + 2min tread - time yourself" }
   },
-  3: {  // PEAK (weeks 21-26) — test-specific rehearsal, taper into selection
-    mainLift:      { repsLow: 3, repsHigh: 6,  sets: 4, baseRpe: 8 },
-    secondaryLift: { repsLow: 4, repsHigh: 6,  sets: 3, baseRpe: 8 },
-    accessory:     { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 7 },
-    cadence:       { sets: 3, pct: 1.0, note: "Max-effort — SFET cadence protocol simulation" },
+  3: {  // PEAK (weeks 21-26) - test-specific rehearsal, taper into selection
+    mainLift:      { repsLow: 3, repsHigh: 6,  sets: 4, baseRpe: 9 },
+    secondaryLift: { repsLow: 4, repsHigh: 6,  sets: 3, baseRpe: 8.5 },
+    accessory:     { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 8 },
+    hyp:           { repsLow: 8, repsHigh: 12, sets: 3, baseRpe: 8.5 },
+    core:          { repsLow: 10, repsHigh: 15, sets: 3, baseRpe: 7.5 },
+    cadence:       { sets: 3, pct: 1.0, note: "Max-effort - SFET cadence protocol simulation" },
+    erg:           { durationMin: 20, note: "6 x 500m hard, 90s easy paddle between" },
     longRun:       { distanceKm: 15, type: "polarized", note: "Last 20% at goal pace" },
     easyRun:       { durationMin: 40, note: "Z2 recovery" },
-    thresholdRun:  { durationMin: 30, paceHint: "~4:30/km", note: "30 min at threshold or 3 × 10 min at 4:30/km" },
-    speedIntervals:{ reps: 8, distanceM: 400, paceHint: "3:45/km", rest: "60s jog", note: "8 × 400m at sub-9 2.4km pace" },
-    ruck:          { distanceKm: 11, loadKg: 28, paceHint: "8:00/km", note: "SFET test load and target pace — 90 min stomp" },
-    swim:          { distanceKm: 0.4, kit: true, note: "SFET protocol: 2min tread + 400m in kit, target ≤16:00" }
+    thresholdRun:  { durationMin: 30, paceHint: "~4:30/km", note: "30 min at threshold or 3 x 10 min at 4:30/km" },
+    speedIntervals:{ reps: 8, distanceM: 400, paceHint: "3:45/km", rest: "60s jog", note: "8 x 400m at sub-9 2.4km pace" },
+    ruck:          { distanceKm: 11, loadKg: 28, paceHint: "8:00/km", note: "SFET test load and target pace - 90 min stomp. Still a walk." },
+    swim:          { distanceKm: 0.4, kit: true, note: "SFET protocol: 2min tread + 400m in kit, target under 16:00" }
   }
 };
+
+// Shown on every ruck session - the sore-back fix is pack fit + pace, not just core.
+const RUCK_FORM_CUES = [
+  "Pack rides HIGH and TIGHT between the shoulder blades - a sagging pack puts a long lever on your lumbar spine.",
+  "Brisk walk, never a jog. Running under load multiplies spinal compression cycles.",
+  "Hip belt takes the weight, shoulder straps only stabilise.",
+  "Short stride, tall chest. If your lower back is arching, the pack is too low or too heavy."
+];
 
 // SFET lift templates — 3 sessions/wk with cadence finishers baked in
 const LIFT_TEMPLATES = {
@@ -1096,7 +1193,9 @@ const LIFT_TEMPLATES = {
       { name: "Bench Press",       role: "mainLift",      key: "bench-press" },
       { name: "Overhead Press",    role: "secondaryLift", key: "ohp" },
       { name: "Weighted Dips",     role: "accessory",     key: "dips" },
-      { name: "Cadence Push-ups",  role: "cadence",       key: "cadence-pushups", unit: "reps" }
+      { name: "Cadence Push-ups",  role: "cadence",       key: "cadence-pushups", unit: "reps" },
+      { name: "Dead Bug",          role: "core",          key: "dead-bug",  unit: "reps" },
+      { name: "Ab Wheel Rollout",  role: "core",          key: "ab-wheel",  unit: "reps" }
     ]
   },
   "upper-pull": {
@@ -1106,7 +1205,9 @@ const LIFT_TEMPLATES = {
       { name: "Weighted Pull-up",  role: "mainLift",      key: "wt-pullup" },
       { name: "Barbell Row",       role: "secondaryLift", key: "barbell-row" },
       { name: "Cable Row",         role: "accessory",     key: "cable-row" },
-      { name: "Cadence Pull-ups",  role: "cadence",       key: "cadence-pullups", unit: "reps" }
+      { name: "Cadence Pull-ups",  role: "cadence",       key: "cadence-pullups", unit: "reps" },
+      { name: "Pallof Press",      role: "core",          key: "pallof",         unit: "reps" },
+      { name: "Suitcase Carry",    role: "core",          key: "suitcase-carry", unit: "meters" }
     ]
   },
   "lower-strength": {
@@ -1116,7 +1217,21 @@ const LIFT_TEMPLATES = {
       { name: "Back Squat",            role: "mainLift",      key: "back-squat" },
       { name: "Deadlift",              role: "secondaryLift", key: "deadlift" },
       { name: "Bulgarian Split Squat", role: "accessory",     key: "bss" },
-      { name: "Farmer's Carry",        role: "accessory",     key: "farmers-carry", unit: "meters" }
+      { name: "Farmer's Carry",        role: "accessory",     key: "farmers-carry", unit: "meters" },
+      { name: "Side Plank",            role: "core",          key: "side-plank", unit: "seconds" },
+      { name: "Bird Dog",              role: "core",          key: "bird-dog",   unit: "reps" }
+    ]
+  },
+  "upper-hyp": {
+    name: "Upper Hypertrophy",
+    short: "Hyp",
+    exercises: [
+      { name: "Incline DB Press",       role: "hyp", key: "incline-db" },
+      { name: "Chest-Supported Row",    role: "hyp", key: "chest-row" },
+      { name: "Lateral Raise",          role: "hyp", key: "lateral-raise" },
+      { name: "Cable Fly",              role: "hyp", key: "cable-fly" },
+      { name: "EZ Curl + Pushdown SS",  role: "hyp", key: "curl-pushdown" },
+      { name: "Row Erg Finisher",       role: "erg", key: "erg-finisher", unit: "minutes" }
     ]
   }
 };
@@ -1128,10 +1243,34 @@ const DAY_TEMPLATES = {
   Tue: [ { slot: "AM", type: "run",  variant: "threshold" },
          { slot: "PM", type: "swim" } ],
   Wed: [ { slot: "AM", type: "lift", key: "upper-pull" } ],
-  Thu: [ { slot: "AM", type: "run",  variant: "speed" } ],
+  Thu: [ { slot: "AM", type: "run",  variant: "speed" },
+         { slot: "PM", type: "lift", key: "upper-hyp" } ],
   Fri: [ { slot: "AM", type: "lift", key: "lower-strength" } ],
   Sat: [ { slot: "AM", type: "ruck" } ],
   Sun: [ { slot: "AM", type: "run",  variant: "long" } ]
+};
+
+// Day-type drives the macro profile. Ruck/long-run days need carbs; lift days need protein.
+function dayTypeFor(iso) {
+  const meta = loadData().meta;
+  const rx = getPrescriptionForDate(iso, meta);
+  if (!rx.sessions || !rx.sessions.length) return "recovery";
+  let hasLift = false, hasBigEndurance = false;
+  for (const sess of rx.sessions) {
+    if (sess.type === "lift") hasLift = true;
+    if (sess.type === "ruck") hasBigEndurance = true;
+    if (sess.type === "run" && sess.cardio && sess.cardio.variant === "long") hasBigEndurance = true;
+    if (sess.type === "run" && sess.cardio && sess.cardio.variant === "threshold") hasBigEndurance = true;
+  }
+  if (hasLift) return "lift";
+  if (hasBigEndurance) return "endurance";
+  return "recovery";
+}
+
+const MACRO_PROFILE_LABELS = {
+  lift:      "Lift day",
+  endurance: "Endurance day",
+  recovery:  "Recovery day"
 };
 
 // ------------------------------------------------------------------
@@ -1283,6 +1422,18 @@ function getPrescriptionForDate(iso, meta) {
             note: cad.note
           };
         }
+        if (ex.role === "erg") {
+          const e = rx.erg;
+          return {
+            name: ex.name, key: ex.key, role: "erg",
+            unit: "minutes",
+            sets: 1,
+            reps: e.durationMin,
+            rpe: 7,
+            repsRange: e.note,
+            note: e.note
+          };
+        }
         const role = rx[ex.role];
         const sets = setsForWeekInMeso(mesoInfo.weekInMeso, role.sets);
         const reps = repsForWeekInMeso(mesoInfo.weekInMeso, role.repsLow, role.repsHigh);
@@ -1353,7 +1504,8 @@ function getPrescriptionForDate(iso, meta) {
         distanceKm: isDeload ? Math.max(4, Math.round(r.distanceKm * 0.6)) : r.distanceKm,
         loadKg:     isDeload ? Math.max(8, Math.round(r.loadKg * 0.6))    : r.loadKg,
         paceHint:   r.paceHint,
-        note:       isDeload ? "Deload — lighter load, shorter distance" : r.note
+        note:       isDeload ? "Deload - lighter load, shorter distance" : r.note,
+        formCues:   RUCK_FORM_CUES
       };
     } else if (s.type === "rest") {
       sess.name = "Rest Day";
@@ -1384,6 +1536,8 @@ function loadData() {
       _cachedData.schemaVersion = SCHEMA_VERSION;
       ensureRecentsSeeded(_cachedData);
       ensureSfetMigrated(_cachedData);
+      ensurePhase2Migrated(_cachedData);
+      normaliseMacroProfiles(_cachedData);
       return _cachedData;
     }
   } catch (e) {
@@ -1397,7 +1551,8 @@ function loadData() {
     days: {},
     recents: { morning: [], arvo: [], dinner: [] },
     standardsLog: {},
-    _sfetMigrated: true
+    _sfetMigrated: true,
+    _phase2Migrated: true
   };
   return _cachedData;
 }
@@ -1409,6 +1564,44 @@ function ensureSfetMigrated(data) {
   data.meta.sfetStartDate = "2026-09-07";
   data.meta.targetDate = "2027-03-07";
   data._sfetMigrated = true;
+}
+
+// Oct 2026 pivot: maintenance phase at ~72kg, per-day macro profiles, hypertrophy block.
+// The old 1775 kcal / 67 kg targets were driving a deficit that had already stalled.
+function ensurePhase2Migrated(data) {
+  if (data._phase2Migrated) return;
+  data.meta.targetWeightKg = 72;
+  data.meta.dailyCalorieTarget = 2600;
+  if (!data.meta.macroProfiles) {
+    data.meta.macroProfiles = JSON.parse(JSON.stringify(DEFAULT_META.macroProfiles));
+  }
+  if (data.meta.predictorEnabled == null) data.meta.predictorEnabled = true;
+  data._phase2Migrated = true;
+}
+
+// Fill in any profile keys a stored dataset predates.
+function normaliseMacroProfiles(data) {
+  const def = DEFAULT_META.macroProfiles;
+  if (!data.meta.macroProfiles) {
+    data.meta.macroProfiles = JSON.parse(JSON.stringify(def));
+    return;
+  }
+  for (const k of Object.keys(def)) {
+    if (!data.meta.macroProfiles[k]) {
+      data.meta.macroProfiles[k] = Object.assign({}, def[k]);
+    } else {
+      data.meta.macroProfiles[k] = Object.assign({}, def[k], data.meta.macroProfiles[k]);
+    }
+  }
+}
+
+// The day's live macro targets, chosen by what is programmed that day.
+function activeMacroTargets(iso) {
+  const data = loadData();
+  normaliseMacroProfiles(data);
+  const t = dayTypeFor(iso);
+  const p = data.meta.macroProfiles[t] || data.meta.macroProfiles.lift;
+  return Object.assign({ dayType: t, dayLabel: MACRO_PROFILE_LABELS[t] || t }, p);
 }
 
 // Seed per-section recents from existing meal log history so previously-logged
@@ -2285,20 +2478,36 @@ function renderLiftBody(iso, s) {
   let html = "";
   for (const ex of s.exercises) {
     const log = getExerciseLog(iso, s.id, ex.key);
-    const suggested = suggestWeight(ex.key, ex.reps, ex.rpe, ex.role, iso);
-    const targetLabel = ex.unit === "seconds"
-      ? `${ex.sets} × ${ex.reps}s`
-      : `${ex.sets} × ${ex.reps} reps @ RPE ${ex.rpe.toFixed(1).replace(/\.0$/, "")}`;
+    // Only barbell/dumbbell work gets a load suggestion
+    const suggested = (!ex.unit || ex.unit === "kg")
+      ? suggestWeight(ex.key, ex.reps, ex.rpe, ex.role, iso) : null;
+    const rpeStr = typeof ex.rpe === "number"
+      ? ex.rpe.toFixed(1).replace(/\.0$/, "") : ex.rpe;
+    const targetLabel =
+        ex.role === "erg"            ? `${ex.reps} min`
+      : ex.unit === "seconds"        ? `${ex.sets} × ${ex.reps}s`
+      : ex.unit === "meters"         ? `${ex.sets} × ${ex.reps}m`
+      : typeof ex.reps === "string"  ? `${ex.sets} × ${ex.reps}`
+      : `${ex.sets} × ${ex.reps} reps @ RPE ${rpeStr}`;
+    const badge =
+        ex.role === "core" ? `<span class="ex-badge core">Core</span>`
+      : ex.role === "hyp"  ? `<span class="ex-badge hyp">Hypertrophy</span>`
+      : ex.role === "erg"  ? `<span class="ex-badge erg">Erg</span>`
+      : "";
 
     html += `
       <div class="exercise" data-exercise-key="${ex.key}" data-session-id="${s.id}">
         <div class="exercise-head">
-          <div class="exercise-name">${ex.name}</div>
+          <div class="exercise-name">${ex.name}${badge}</div>
           <div class="exercise-target">${targetLabel}</div>
         </div>
+        ${ex.note ? `<div class="ex-note">${ex.note}</div>` : ""}
         ${ex.unit !== "seconds" && suggested ? `<div class="suggested">Suggested: ${suggested}kg</div>` : ""}
         <div class="set-row header">
-          <span>#</span><span>Reps</span><span>${ex.unit === "seconds" ? "Sec" : "kg"}</span><span>RPE</span><span></span>
+          <span>#</span><span>${ex.unit === "minutes" ? "Min" : "Reps"}</span><span>${
+            ex.unit === "seconds" ? "Sec" : ex.unit === "meters" ? "m" :
+            ex.unit === "minutes" ? "—"   : ex.unit === "reps"   ? "—" : "kg"
+          }</span><span>RPE</span><span></span>
         </div>
     `;
     for (let i = 0; i < ex.sets; i++) {
@@ -2364,6 +2573,12 @@ function renderRuckBody(iso, s) {
         Target: <strong>${r.distanceKm}km @ ${r.loadKg}kg</strong> · pace ${r.paceHint}<br>
         ${r.note}
       </div>
+      ${r.formCues ? `
+        <details class="ruck-cues">
+          <summary>Form check — read before you load up</summary>
+          <ul>${r.formCues.map(c => `<li>${c}</li>`).join("")}</ul>
+        </details>
+      ` : ""}
       <div class="cardio-log">
         <div class="field">
           <label>Distance (km)</label>
@@ -2475,6 +2690,13 @@ function wireToday(iso) {
       const log = getExerciseLog(iso, sid, exKey);
       if (!log.setsLogged[idx]) log.setsLogged[idx] = {};
       log.setsLogged[idx].completed = !log.setsLogged[idx].completed;
+      // Parent exercise flag was never being set - keep it in sync with its sets
+      const totalSets = exEl.querySelectorAll(".set-row[data-set-idx]").length;
+      let done = 0;
+      for (let i = 0; i < totalSets; i++) {
+        if (log.setsLogged[i] && log.setsLogged[i].completed) done++;
+      }
+      log.completed = totalSets > 0 && done === totalSets;
       saveData();
       chk.classList.toggle("on", log.setsLogged[idx].completed);
       chk.textContent = log.setsLogged[idx].completed ? "✓" : "";
@@ -2562,7 +2784,8 @@ function renderNutrition() {
   const data = loadData();
   const iso = state.currentDate;
   const total = dayTotalKcal(iso);
-  const target = data.meta.dailyCalorieTarget;
+  const prof = macrosEnabled() ? activeMacroTargets(iso) : null;
+  const target = prof ? prof.kcal : data.meta.dailyCalorieTarget;
   const macroRows = renderMacroRows(iso);
 
   let totalCard = "";
@@ -2692,14 +2915,14 @@ function renderNutrition() {
 
 function renderMacroRows(iso) {
   if (!macrosEnabled()) return "";
-  const meta = loadData().meta;
   const totals = dayMacroTotals(iso);
-  const anyTarget = MACRO_FIELDS.some(m => meta[m.target] != null && meta[m.target] > 0);
+  const prof = activeMacroTargets(iso);
+  const anyTarget = MACRO_FIELDS.some(m => prof[m.key] != null && prof[m.key] > 0);
   if (!totals.hasAny && !anyTarget) return "";
-  let rows = "";
+  let rows = `<div class="macro-daytype">${prof.dayLabel} targets</div>`;
   for (const m of MACRO_FIELDS) {
     const val = Math.round(totals[m.key]);
-    const target = meta[m.target];
+    const target = prof[m.key];
     const hasTarget = target != null && target > 0;
     const pct = hasTarget ? Math.min(100, Math.round(val / target * 100)) : 0;
     const over = hasTarget && val > target;
@@ -3652,26 +3875,36 @@ function renderSettings() {
               <span class="slider"></span>
             </label>
           </div>
-          ${meta.macrosEnabled ? `
-            <div class="settings-row">
-              <div class="label">Protein target<div class="desc">grams/day</div></div>
-              <input type="number" step="1" min="0" max="500" data-setting="proteinTargetG" value="${meta.proteinTargetG != null ? meta.proteinTargetG : ""}" placeholder="-">
-            </div>
-            <div class="settings-row">
-              <div class="label">Carb target<div class="desc">grams/day</div></div>
-              <input type="number" step="1" min="0" max="800" data-setting="carbTargetG" value="${meta.carbTargetG != null ? meta.carbTargetG : ""}" placeholder="-">
-            </div>
-            <div class="settings-row">
-              <div class="label">Fat target<div class="desc">grams/day</div></div>
-              <input type="number" step="1" min="0" max="300" data-setting="fatTargetG" value="${meta.fatTargetG != null ? meta.fatTargetG : ""}" placeholder="-">
-            </div>
-          ` : ""}
         </div>
-        ${meta.macrosEnabled ? `<div class="macro-sanity">${macroTargetSanity(meta)}</div>` : `
+        ${meta.macrosEnabled ? `
+          <div class="muted" style="font-size:12px;margin:12px 2px 8px;line-height:1.5;">
+            Targets follow the day's training. Lift days push protein; ruck and long-run days push carbs.
+          </div>
+          ${renderMacroProfileEditor(meta)}
+          <div class="macro-sanity">${macroWeeklySummary(meta)}</div>
+        ` : `
           <p class="muted" style="font-size:12px;margin:10px 2px 0;line-height:1.5;">
             Off by default. Turn it on to get an <strong>+ Add macros</strong> button when logging food,
             plus protein/carb/fat totals on the Food tab. Leave it off and nothing changes.
           </p>`}
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>Tabs &amp; display</summary>
+      <div class="section-body">
+        <div class="card">
+          <div class="settings-row">
+            <div class="label">Predictor tab<div class="desc">Predicted vs actual weekly loss</div></div>
+            <label class="switch">
+              <input type="checkbox" data-setting-bool="predictorEnabled" ${meta.predictorEnabled !== false ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+        <p class="muted" style="font-size:12px;margin:10px 2px 0;line-height:1.5;">
+          Turn off to slim the tab bar. Only earns its place while you're calorie tracking toward a deficit.
+        </p>
       </div>
     </details>
 
@@ -3744,6 +3977,17 @@ function renderSettings() {
     });
   });
 
+  app.querySelectorAll('[data-profile]').forEach(inp => {
+    inp.addEventListener("change", () => {
+      normaliseMacroProfiles(loadData());
+      const prof = inp.dataset.profile, field = inp.dataset.profileField;
+      const v = inp.value === "" ? null : parseInt(inp.value, 10);
+      meta.macroProfiles[prof][field] = Number.isFinite(v) ? v : null;
+      saveData();
+      render();
+    });
+  });
+
   app.querySelectorAll('[data-setting-bool]').forEach(inp => {
     inp.addEventListener("change", () => {
       meta[inp.dataset.settingBool] = inp.checked;
@@ -3774,6 +4018,54 @@ function renderSettings() {
       showToast("All data erased");
     }
   };
+}
+
+function renderMacroProfileEditor(meta) {
+  normaliseMacroProfiles(loadData());
+  const fields = [["kcal", "kcal"], ["proteinG", "P g"], ["carbsG", "C g"], ["fatG", "F g"]];
+  let html = `<div class="profile-editor">`;
+  for (const key of ["lift", "endurance", "recovery"]) {
+    const p = meta.macroProfiles[key];
+    const derived = kcalFromMacros({ proteinG: p.proteinG, carbsG: p.carbsG, fatG: p.fatG });
+    const off = (derived != null && p.kcal) ? Math.abs(derived - p.kcal) > 60 : false;
+    html += `
+      <div class="profile-row">
+        <div class="profile-head">
+          <span class="profile-name">${MACRO_PROFILE_LABELS[key]}</span>
+          <span class="profile-derived ${off ? "warn" : ""}">${derived != null ? derived + " kcal from macros" : ""}</span>
+        </div>
+        <div class="profile-grid">
+          ${fields.map(([f, lbl]) => `
+            <div class="field">
+              <label>${lbl}</label>
+              <input type="number" inputmode="numeric" step="1" min="0" max="6000"
+                     data-profile="${key}" data-profile-field="${f}"
+                     value="${p[f] != null ? p[f] : ""}" placeholder="-">
+            </div>
+          `).join("")}
+        </div>
+      </div>`;
+  }
+  return html + `</div>`;
+}
+
+// Weekly average across the current template: 4 lift days, 3 endurance days.
+function macroWeeklySummary(meta) {
+  normaliseMacroProfiles(loadData());
+  const p = meta.macroProfiles;
+  const kcal = (4 * (p.lift.kcal || 0) + 3 * (p.endurance.kcal || 0)) / 7;
+  const prot = (4 * (p.lift.proteinG || 0) + 3 * (p.endurance.proteinG || 0)) / 7;
+  const bw = latestWeightOnOrBefore(todayISO()) || meta.targetWeightKg;
+  let out = `Weekly average <strong>${Math.round(kcal)} kcal</strong> and <strong>${Math.round(prot)}g protein</strong>`;
+  if (bw) {
+    const gkg = prot / bw;
+    out += ` &mdash; ${gkg.toFixed(2)} g/kg at ${bw}kg.`;
+    if (gkg < 1.6) out += ` Below the 1.6 g/kg hypertrophy floor.`;
+    else if (gkg > 2.6) out += ` Higher than needed; those calories would do more as carbs.`;
+  } else {
+    out += ".";
+  }
+  return out;
 }
 
 // Cross-check macro targets against the kcal target so the two can't silently disagree.
@@ -3950,7 +4242,24 @@ function importJson(jsonText) {
 // MAIN RENDER
 // ------------------------------------------------------------------
 
+function applyTabVisibility() {
+  const meta = loadData().meta;
+  const nav = document.querySelector("nav.tabs");
+  if (!nav) return;
+  const predBtn = nav.querySelector('button[data-view="predictor"]');
+  if (predBtn) predBtn.hidden = (meta.predictorEnabled === false);
+  const shown = Array.from(nav.querySelectorAll("button")).filter(b => !b.hidden).length;
+  nav.style.gridTemplateColumns = "repeat(" + shown + ", 1fr)";
+}
+
 function render() {
+  // Don't strand the user on a tab they just turned off
+  if (state.view === "predictor" && loadData().meta.predictorEnabled === false) {
+    state.view = "today";
+    document.querySelectorAll("nav.tabs button").forEach(b =>
+      b.classList.toggle("active", b.dataset.view === "today"));
+  }
+  applyTabVisibility();
   renderTopbar();
   if (state.view === "today") renderToday();
   else if (state.view === "nutrition") renderNutrition();
