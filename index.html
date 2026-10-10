@@ -1155,6 +1155,22 @@
     font-size: 12px; font-weight: 600;
   }
 
+  .set-row.editable { grid-template-columns: 18px 1fr 1fr 34px 28px; }
+  .set-del {
+    width: 28px; height: 30px; border-radius: 7px;
+    background: rgba(248,113,113,0.12);
+    border: 1px solid rgba(248,113,113,0.3);
+    color: var(--danger); font-size: 12px;
+  }
+  .set-del:active { background: rgba(248,113,113,0.25); }
+  .version-line {
+    font-size: 11px; color: var(--dim);
+    padding-top: 10px; margin-top: 12px;
+    border-top: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  .version-line strong { color: var(--muted); }
+
   .rest-bar {
     flex-shrink: 0;
     display: flex; align-items: center; gap: 12px;
@@ -1272,6 +1288,8 @@
 // ------------------------------------------------------------------
 
 const STORAGE_KEY = "recompTracker.v1";
+// Bump alongside CACHE_VERSION in sw.js on every release
+const APP_VERSION = "v12";
 const SCHEMA_VERSION = 2;
 
 const DEFAULT_META = {
@@ -2903,7 +2921,11 @@ function wireToday(iso) {
   const addExtraBtn = document.querySelector('[data-action="add-extra"]');
   if (addExtraBtn) addExtraBtn.addEventListener("click", () => openExtraModal(iso, null));
   document.querySelectorAll('[data-action="edit-extra"]').forEach(el => {
-    el.addEventListener("click", () => openExtraModal(iso, el.dataset.extraId));
+    el.addEventListener("click", () => {
+      const es = getExtraSessions(iso).find(x => x.id === el.dataset.extraId);
+      if (es && es.builder) openBuilderEditor(iso, el.dataset.extraId);
+      else openExtraModal(iso, el.dataset.extraId);
+    });
   });
 
   // Toggle session body
@@ -4249,6 +4271,9 @@ function renderSettings() {
             <li><strong>Phase 3 Peak</strong> (wks 21-26): peak strength (3-6 reps), test-load ruck 11km/28kg @ 8:00/km, 30min threshold, 8×400m @ 3:45/km, 400m kit swim.</li>
           </ul>
           <p>Cadence push-ups/pull-ups baked into lift days as finishers (3 sets, submax → max as phases progress). Weekly template runs Mon push / Tue threshold+swim / Wed pull / Thu speed / Fri lower / Sat ruck / Sun long run. Deload every 4 weeks (halves volume, backs off intensity).</p>
+          <p class="version-line">
+            App <strong>${APP_VERSION}</strong> · data schema v${SCHEMA_VERSION}<span id="sw-cache-line"></span>
+          </p>
           <p>Sources: SOCOMD SFET published standards; Tactical Barbell Green Protocol (concurrent SF prep); Helms, Muscle &amp; Strength Pyramid 3e (RPE progression); Wilson 2012 (concurrent-training interference); Seiler (polarized intensity distribution).</p>
         </div>
       </div>
@@ -4289,6 +4314,14 @@ function renderSettings() {
       render();
     });
   });
+
+  // Show which service-worker cache is actually live, so a stale build is obvious
+  if (window.caches && caches.keys) {
+    caches.keys().then(keys => {
+      const el = document.getElementById("sw-cache-line");
+      if (el && keys.length) el.textContent = " · cache " + keys.join(", ");
+    }).catch(() => {});
+  }
 
   // Standards list
   renderStandardsList();
@@ -5100,9 +5133,12 @@ function renderBuilder() {
     : s === "review"   ? builderReviewHtml()
     : s === "live"     ? builderLiveHtml()
     : s === "finish"   ? builderFinishHtml()
+    : s === "edit"     ? builderEditHtml()
     : "";
   const titles = { menu: "Gym session", category: "Choose a category", goal: "Choose a goal",
-                   review: "Your workout", live: "Workout", finish: "Finish workout" };
+                   review: "Your workout", live: "Workout", finish: "Finish workout",
+                   edit: "Edit workout" };
+  // edit has no parent step - its back button closes the builder
   const backTo = { category: "menu", goal: "category", review: "goal", finish: "live" };
 
   root.innerHTML = `
@@ -5235,7 +5271,7 @@ function builderReviewHtml() {
   `;
 }
 
-function builderLiveHtml() {
+function liveExerciseListHtml(editable) {
   const rows = builderState.exercises;
   return `
     <div class="bld-list live">
@@ -5249,13 +5285,15 @@ function builderLiveHtml() {
             <div class="live-head">
               <div>
                 <div class="br-name">${escapeHtml(ex.name)}${ex.unilateral ? `<span class="br-side">each side</span>` : ""}</div>
-                <div class="br-spec">target ${r.repLow === r.repHigh ? r.repLow : r.repLow + "-" + r.repHigh}${r.unit === "seconds" ? "s" : ""} · rest ${fmtClock(r.restSec)}</div>
+                <div class="br-spec">target ${r.repLow === r.repHigh ? r.repLow : r.repLow + "-" + r.repHigh}${r.unit === "seconds" ? "s" : ""}${editable ? "" : " · rest " + fmtClock(r.restSec)}</div>
               </div>
-              <button class="live-skip" data-bld="skip-ex" data-idx="${i}">${r.skipped ? "Unskip" : "Skip"}</button>
+              ${editable
+                ? `<button class="live-skip" data-bld="remove-ex" data-idx="${i}">Remove</button>`
+                : `<button class="live-skip" data-bld="skip-ex" data-idx="${i}">${r.skipped ? "Unskip" : "Skip"}</button>`}
             </div>
-            <div class="set-row header"><span>#</span><span>${unitLbl}</span><span>${loadLbl}</span><span></span></div>
+            <div class="set-row header ${editable ? "editable" : ""}"><span>#</span><span>${unitLbl}</span><span>${loadLbl}</span><span></span>${editable ? "<span></span>" : ""}</div>
             ${(r.setsLogged || []).map((st, si) => `
-              <div class="set-row" data-idx="${i}" data-si="${si}">
+              <div class="set-row ${editable ? "editable" : ""}" data-idx="${i}" data-si="${si}">
                 <div class="set-num">${si + 1}</div>
                 <input type="number" inputmode="numeric" step="1" min="0" max="999"
                        data-bld-field="reps" data-idx="${i}" data-si="${si}"
@@ -5264,13 +5302,112 @@ function builderLiveHtml() {
                        data-bld-field="weightKg" data-idx="${i}" data-si="${si}"
                        value="${st.weightKg != null ? st.weightKg : ""}" placeholder="${last && last.weightKg != null ? last.weightKg : "—"}">
                 <div class="set-check ${st.completed ? "on" : ""}" data-bld="tick" data-idx="${i}" data-si="${si}">${st.completed ? "✓" : ""}</div>
+                ${editable ? `<button class="set-del" data-bld="del-set" data-idx="${i}" data-si="${si}">✕</button>` : ""}
               </div>`).join("")}
             <button class="live-addset" data-bld="add-set" data-idx="${i}">+ Add set</button>
           </div>`;
       }).join("")}
+    </div>`;
+}
+
+function builderLiveHtml() {
+  return liveExerciseListHtml(false) +
+    `<button class="btn primary bld-start" data-bld="to-finish">Finish workout</button>`;
+}
+
+function builderEditHtml() {
+  const m = builderState.meta || {};
+  return `
+    <div class="bld-meta">Editing a saved workout — changes flow through to history, PBs and weekly volume.</div>
+    ${liveExerciseListHtml(true)}
+    <button class="btn" data-bld="add-ex" style="width:100%;margin-top:10px;">+ Add exercise</button>
+    <div class="form-row" style="margin-top:18px;">
+      <label>Session name</label>
+      <input type="text" id="bld-name" value="${escapeHtml(m.name || "")}" autocomplete="off">
     </div>
-    <button class="btn primary bld-start" data-bld="to-finish">Finish workout</button>
-  `;
+    <div class="form-row"><label>Duration (min)</label>
+      <input type="number" inputmode="numeric" id="bld-dur" value="${m.durationMin != null ? m.durationMin : ""}"></div>
+    <div class="form-row"><label>Session effort (1-10)</label>
+      <input type="number" inputmode="numeric" min="1" max="10" id="bld-effort" value="${m.effortRating != null ? m.effortRating : ""}" placeholder="optional"></div>
+    <div class="form-row"><label>Comments</label>
+      <input type="text" id="bld-notes" value="${escapeHtml(m.notes || "")}" autocomplete="off"></div>
+    <div class="bld-actions">
+      <button class="btn danger" data-bld="delete-workout">Delete workout</button>
+      <button class="btn primary" data-bld="save-edit">Save changes</button>
+    </div>`;
+}
+
+// Load a saved builder workout back into the builder for editing.
+function openBuilderEditor(iso, extraId) {
+  const es = getExtraSessions(iso).find(e => e.id === extraId);
+  if (!es) return;
+  builderState = {
+    open: true, step: "edit", iso: iso,
+    category: es.category || null, goal: es.goal || null,
+    editingId: extraId,
+    meta: { name: es.name, durationMin: es.durationMin,
+            effortRating: es.effortRating, notes: es.notes },
+    exercises: Object.keys(es.exercises || {}).map(k => {
+      const logged = (es.exercises[k].setsLogged || []).map(x => Object.assign({}, x));
+      return {
+        key: k, sets: logged.length || 1,
+        repLow: 8, repHigh: 12, restSec: 90,
+        unit: getExercise(k).timeBased ? "seconds" : null,
+        setsLogged: logged.length ? logged : [{}]
+      };
+    })
+  };
+  renderBuilder();
+}
+
+function saveBuilderEdit() {
+  const root = document.getElementById("builder-root");
+  const iso = builderState.iso, id = builderState.editingId;
+  const name  = root.querySelector("#bld-name").value.trim();
+  const dur   = parseInt(root.querySelector("#bld-dur").value, 10);
+  const eff   = parseInt(root.querySelector("#bld-effort").value, 10);
+  const notes = root.querySelector("#bld-notes").value.trim();
+
+  const exercises = {};
+  let any = false;
+  for (const r of builderState.exercises) {
+    const sets = (r.setsLogged || []).filter(x => x && (x.reps != null || x.weightKg != null));
+    if (!sets.length) continue;
+    any = true;
+    exercises[r.key] = {
+      setsLogged: sets.map(x => ({ reps: x.reps != null ? x.reps : null,
+                                   weightKg: x.weightKg != null ? x.weightKg : null,
+                                   completed: !!x.completed, note: x.note || "" })),
+      completed: sets.every(x => x.completed),
+      notes: ""
+    };
+  }
+  if (!any) { showToast("Keep at least one logged set, or delete the workout"); return; }
+
+  updateExtraSession(iso, id, {
+    name: name || "Gym session",
+    durationMin: Number.isFinite(dur) ? dur : null,
+    effortRating: Number.isFinite(eff) ? eff : null,
+    notes: notes, exercises: exercises
+  });
+  closeBuilder();
+  showToast("Workout updated");
+}
+
+function deleteBuilderWorkout() {
+  const iso = builderState.iso, id = builderState.editingId;
+  const es = getExtraSessions(iso).find(e => e.id === id);
+  if (!confirm("Delete this workout and all its logged sets?")) return;
+  // If this workout is what marked a programmed session complete, untick it
+  // again so adherence doesn't stay inflated.
+  if (es && es.linkedSessionId) {
+    const sl = getSessionLog(iso, es.linkedSessionId);
+    sl.completed = false;
+    saveData();
+  }
+  deleteExtraSession(iso, id);
+  closeBuilder();
+  showToast("Workout deleted");
 }
 
 function builderFinishHtml() {
@@ -5407,7 +5544,7 @@ function wireBuilder(backStep) {
     st.completed = !st.completed;
     persistDraft();
     renderBuilder();
-    if (st.completed) startRestTimer(row.restSec || 90);
+    if (st.completed && !builderState.editingId) startRestTimer(row.restSec || 90);
   });
   on('[data-bld="add-set"]', e => {
     const i = +e.currentTarget.dataset.idx;
@@ -5420,6 +5557,18 @@ function wireBuilder(backStep) {
     persistDraft(); renderBuilder();
   });
   on('[data-bld="skip-rest"]', () => stopRestTimer());
+  on('[data-bld="remove-ex"]', e => {
+    builderState.exercises.splice(+e.currentTarget.dataset.idx, 1);
+    renderBuilder();
+  });
+  on('[data-bld="del-set"]', e => {
+    const i = +e.currentTarget.dataset.idx, si = +e.currentTarget.dataset.si;
+    builderState.exercises[i].setsLogged.splice(si, 1);
+    if (!builderState.exercises[i].setsLogged.length) builderState.exercises[i].setsLogged.push({});
+    persistDraft(); renderBuilder();
+  });
+  on('[data-bld="save-edit"]', () => saveBuilderEdit());
+  on('[data-bld="delete-workout"]', () => deleteBuilderWorkout());
   on('[data-bld="to-finish"]', () => builderGo("finish"));
   on('[data-bld="save-workout"]', () => saveBuilderWorkout());
 
@@ -5434,6 +5583,8 @@ function wireBuilder(backStep) {
 }
 
 function persistDraft() {
+  // Editing a saved workout is not an in-progress session - no resume draft
+  if (builderState.editingId) return;
   saveDraft({ iso: builderState.iso, category: builderState.category,
               goal: builderState.goal, exercises: builderState.exercises });
 }
@@ -5509,11 +5660,16 @@ function openExercisePicker() {
     const add = key => {
       const G = BUILDER_GOALS[builderState.goal] || BUILDER_GOALS.hypertrophy;
       const measured = isMeasuredExercise(key);
-      builderState.exercises.push({
+      const row = {
         key, sets: G.sets[0],
         repLow: measured ? 30 : G.reps[0], repHigh: measured ? 45 : G.reps[1],
         restSec: G.restSec, unit: getExercise(key).timeBased ? "seconds" : null
-      });
+      };
+      // Added mid-session or while editing, so it needs loggable set rows
+      if (builderState.step === "live" || builderState.step === "edit") {
+        row.setsLogged = Array.from({ length: row.sets }, () => ({}));
+      }
+      builderState.exercises.push(row);
       closeModal(); renderBuilder();
     };
     root.querySelectorAll("[data-pick-key]").forEach(b =>
