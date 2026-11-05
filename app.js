@@ -1,0 +1,3421 @@
+"use strict";
+
+
+// ------------------------------------------------------------------
+// CONSTANTS
+// ------------------------------------------------------------------
+
+const STORAGE_KEY = "recompTracker.v1";
+// Bump alongside CACHE_VERSION in sw.js on every release
+const APP_VERSION = "v17";
+const SCHEMA_VERSION = 3;
+
+const DEFAULT_META = {
+  startDate: "2026-06-22",           // Weight tracking start (kept for chart continuity)
+  sfetStartDate: "2026-09-07",       // SFET training program start (Mon of current week)
+  startWeightKg: 79.0,
+  targetWeightKg: 69.0,
+  targetDate: "2027-03-07",          // SFET selection window
+  ageBracket: "30-39",
+  lastBackupAt: null,
+  rosterAnchor: "2026-06-22",        // Legacy; unused post-SFET pivot
+  setupComplete: false,
+  dailyCalorieTarget: null,
+  age: null,
+  heightCm: null,
+  sex: "male",
+  macrosEnabled: false,        // Opt-in: off by default so shared users aren't forced into macros
+  proteinTargetG: null,        // Legacy flat targets - superseded by macroProfiles
+  carbTargetG: null,
+  fatTargetG: null,
+  predictorEnabled: true,      // Predictor tab can be hidden to slim the tab bar
+  hiitLoadSex: null,           // Which column of the Rx loads to show; seeded from sex
+  foodEnabled: true,           // Food tab likewise - core tabs stay, these two are optional
+  // Targets flex with the day's training demand: lifting wants protein, rucking wants carbs.
+  macroProfiles: {
+    lift:      { kcal: 2600, proteinG: 170, carbsG: 310, fatG: 75 },
+    endurance: { kcal: 2800, proteinG: 155, carbsG: 365, fatG: 78 },
+    recovery:  { kcal: 2400, proteinG: 165, carbsG: 260, fatG: 76 }
+  }
+};
+
+// SFET benchmarks — SOCOMD physical standards
+// unit: "reps" | "time" (seconds) | "km"
+const SFET_STANDARDS = [
+  { id: "pushUps",    label: "Cadence Push-ups",          unit: "reps", min: 40,  comp: 65,  higherBetter: true,  short: "Push-ups" },
+  { id: "pullUps",    label: "Cadence Pull-ups",          unit: "reps", min: 7,   comp: 12,  higherBetter: true,  short: "Pull-ups" },
+  { id: "webbingRun", label: "3.2km Webbing Run",         unit: "time", min: 960, comp: 870, higherBetter: false, short: "3.2km Web" },
+  { id: "ruck90",     label: "90min Ruck 28kg",           unit: "km",   min: 10,  comp: 11,  higherBetter: true,  short: "Ruck 90" },
+  { id: "kitSwim",    label: "400m Kit Swim + 2min tread", unit: "time", min: 960, comp: 720, higherBetter: false, short: "Kit Swim" },
+  { id: "run2400",    label: "2.4km Run",                 unit: "time", min: 540, comp: 480, higherBetter: false, short: "2.4km" }
+];
+
+// 7700 kcal/kg is the standard clinical estimate (Wishnofsky 1958), still used
+// in modern energy-balance models. It assumes a fixed energy density for weight
+// loss, which is an approximation — actual metabolic adaptation during a
+// sustained deficit means predicted loss will tend to run slightly ahead of
+// actual loss over long periods. This is exactly what the predicted-vs-actual
+// graph is designed to surface, so no correction is needed in the formula itself.
+const KCAL_PER_KG_FAT = 7700;
+
+const MEAL_SECTIONS = [
+  { key: "morning", label: "Morning" },
+  { key: "arvo",    label: "Arvo" },
+  { key: "dinner",  label: "Dinner" }
+];
+
+// Macro tracking (opt-in via meta.macrosEnabled). Atwater factors: 4/4/9 kcal per gram.
+const MACRO_FIELDS = [
+  { key: "proteinG", label: "Protein", short: "P", target: "proteinTargetG", kcalPerG: 4, color: "var(--aerobic)" },
+  { key: "carbsG",   label: "Carbs",   short: "C", target: "carbTargetG",    kcalPerG: 4, color: "var(--warn)" },
+  { key: "fatG",     label: "Fat",     short: "F", target: "fatTargetG",     kcalPerG: 9, color: "var(--night)" }
+];
+
+// SFET prep: 26-week block, phases indexed from sfetStartDate (Mon of program week 1).
+const PHASES = [
+  { id: 1, name: "Base",  startWeek: 1,  endWeek: 8,  mesoCount: 2 },
+  { id: 2, name: "Build", startWeek: 9,  endWeek: 20, mesoCount: 3 },
+  { id: 3, name: "Peak",  startWeek: 21, endWeek: 26, mesoCount: 2 }
+];
+
+// Each mesocycle = 4 weeks (build → build+ → push → deload).
+// Reps + intensity + endurance targets scale per phase to SFET peak.
+const PHASE_PRESCRIPTION = {
+  1: {  // BASE (weeks 1-8) - rebuild strength, condition to load
+    mainLift:      { repsLow: 6, repsHigh: 10, sets: 4, baseRpe: 8 },
+    secondaryLift: { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 8 },
+    accessory:     { repsLow: 8, repsHigh: 12, sets: 3, baseRpe: 8 },
+    hyp:           { repsLow: 10, repsHigh: 15, sets: 3, baseRpe: 8 },
+    core:          { repsLow: 8,  repsHigh: 12, sets: 3, baseRpe: 7 },
+    cadence:       { sets: 3, pct: 0.6, note: "3 x ~60% of your current max - build volume" },
+    erg:           { durationMin: 15, note: "15 min steady, conversational" },
+    longRun:       { distanceKm: 10, type: "easy",       note: "Z2 / conversational" },
+    easyRun:       { durationMin: 30, note: "Z2 recovery" },
+    thresholdRun:  { durationMin: 20, paceHint: "~4:45/km", note: "20 min continuous at threshold" },
+    speedIntervals:{ reps: 4, distanceM: 400, paceHint: "4:00/km", rest: "2 min jog", note: "4 x 400m, 2 min jog recovery" },
+    ruck:          { distanceKm: 6,  loadKg: 10, paceHint: "9:30/km", note: "Brisk walk only - never jog under load. Build the habit, not the pace." },
+    swim:          { distanceKm: 0.3, kit: false, note: "Technique + 200m + 2min tread" }
+  },
+  2: {  // BUILD (weeks 9-20) - strength endurance, ruck load progression
+    mainLift:      { repsLow: 5, repsHigh: 8,  sets: 4, baseRpe: 8.5 },
+    secondaryLift: { repsLow: 5, repsHigh: 8,  sets: 3, baseRpe: 8 },
+    accessory:     { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 8 },
+    hyp:           { repsLow: 8, repsHigh: 12, sets: 3, baseRpe: 8.5 },
+    core:          { repsLow: 10, repsHigh: 15, sets: 3, baseRpe: 7 },
+    cadence:       { sets: 3, pct: 0.7, note: "3 x ~70% of PR - push volume close to failure" },
+    erg:           { durationMin: 18, note: "5 x 500m hard, 90s easy paddle between" },
+    longRun:       { distanceKm: 13, type: "progressive", note: "Easy start, last 20% at goal pace" },
+    easyRun:       { durationMin: 35, note: "Z2 recovery" },
+    thresholdRun:  { durationMin: 28, paceHint: "~4:35/km", note: "25-30 min at threshold, or 2 x 15 min with 3 min jog" },
+    speedIntervals:{ reps: 6, distanceM: 400, paceHint: "3:50/km", rest: "90s jog", note: "6 x 400m at 2.4km target pace" },
+    ruck:          { distanceKm: 9,  loadKg: 18, paceHint: "9:00/km", note: "Approaching test load. Walk it - if you are jogging, the load is too light or the pace too high." },
+    swim:          { distanceKm: 0.4, kit: true,  note: "300m in kit + 2min tread - time yourself" }
+  },
+  3: {  // PEAK (weeks 21-26) - test-specific rehearsal, taper into selection
+    mainLift:      { repsLow: 3, repsHigh: 6,  sets: 4, baseRpe: 9 },
+    secondaryLift: { repsLow: 4, repsHigh: 6,  sets: 3, baseRpe: 8.5 },
+    accessory:     { repsLow: 6, repsHigh: 10, sets: 3, baseRpe: 8 },
+    hyp:           { repsLow: 8, repsHigh: 12, sets: 3, baseRpe: 8.5 },
+    core:          { repsLow: 10, repsHigh: 15, sets: 3, baseRpe: 7.5 },
+    cadence:       { sets: 3, pct: 1.0, note: "Max-effort - SFET cadence protocol simulation" },
+    erg:           { durationMin: 20, note: "6 x 500m hard, 90s easy paddle between" },
+    longRun:       { distanceKm: 15, type: "polarized", note: "Last 20% at goal pace" },
+    easyRun:       { durationMin: 40, note: "Z2 recovery" },
+    thresholdRun:  { durationMin: 30, paceHint: "~4:30/km", note: "30 min at threshold or 3 x 10 min at 4:30/km" },
+    speedIntervals:{ reps: 8, distanceM: 400, paceHint: "3:45/km", rest: "60s jog", note: "8 x 400m at sub-9 2.4km pace" },
+    ruck:          { distanceKm: 11, loadKg: 28, paceHint: "8:00/km", note: "SFET test load and target pace - 90 min stomp. Still a walk." },
+    swim:          { distanceKm: 0.4, kit: true, note: "SFET protocol: 2min tread + 400m in kit, target under 16:00" }
+  }
+};
+
+// Shown on every ruck session - the sore-back fix is pack fit + pace, not just core.
+const RUCK_FORM_CUES = [
+  "Pack rides HIGH and TIGHT between the shoulder blades - a sagging pack puts a long lever on your lumbar spine.",
+  "Brisk walk, never a jog. Running under load multiplies spinal compression cycles.",
+  "Hip belt takes the weight, shoulder straps only stabilise.",
+  "Short stride, tall chest. If your lower back is arching, the pack is too low or too heavy."
+];
+
+// SFET lift templates — 3 sessions/wk with cadence finishers baked in
+const LIFT_TEMPLATES = {
+  "upper-push": {
+    name: "Upper Push",
+    short: "Push",
+    exercises: [
+      { name: "Bench Press",       role: "mainLift",      key: "bench-press" },
+      { name: "Overhead Press",    role: "secondaryLift", key: "ohp" },
+      { name: "Weighted Dips",     role: "accessory",     key: "dips" },
+      { name: "Cadence Push-ups",  role: "cadence",       key: "cadence-pushups", unit: "reps" },
+      { name: "Dead Bug",          role: "core",          key: "dead-bug",  unit: "reps", perSide: true },
+      { name: "Ab Wheel Rollout",  role: "core",          key: "ab-wheel",  unit: "reps" }
+    ]
+  },
+  "upper-pull": {
+    name: "Upper Pull",
+    short: "Pull",
+    exercises: [
+      { name: "Weighted Pull-up",  role: "mainLift",      key: "wt-pullup" },
+      { name: "Barbell Row",       role: "secondaryLift", key: "barbell-row" },
+      { name: "Cable Row",         role: "accessory",     key: "cable-row" },
+      { name: "Cadence Pull-ups",  role: "cadence",       key: "cadence-pullups", unit: "reps" },
+      { name: "Pallof Press",      role: "core",          key: "pallof",         unit: "reps", perSide: true },
+      { name: "Suitcase Carry",    role: "core",          key: "suitcase-carry", unit: "meters", low: 20, high: 40, perSide: true }
+    ]
+  },
+  "lower-strength": {
+    name: "Lower Strength",
+    short: "Lower",
+    exercises: [
+      { name: "Back Squat",            role: "mainLift",      key: "back-squat" },
+      { name: "Deadlift",              role: "secondaryLift", key: "deadlift" },
+      { name: "Bulgarian Split Squat", role: "accessory",     key: "bss" },
+      { name: "Farmer's Carry",        role: "accessory",     key: "farmers-carry", unit: "meters", low: 30, high: 50 },
+      { name: "Side Plank",            role: "core",          key: "side-plank", unit: "seconds", low: 30, high: 45, perSide: true },
+      { name: "Bird Dog",              role: "core",          key: "bird-dog",   unit: "reps", perSide: true }
+    ]
+  },
+  "upper-hyp": {
+    name: "Upper Hypertrophy",
+    short: "Hyp",
+    exercises: [
+      { name: "Incline DB Press",       role: "hyp", key: "incline-db" },
+      { name: "Chest-Supported Row",    role: "hyp", key: "chest-row" },
+      { name: "Lateral Raise",          role: "hyp", key: "lateral-raise" },
+      { name: "Cable Fly",              role: "hyp", key: "cable-fly" },
+      { name: "EZ Curl + Pushdown SS",  role: "hyp", key: "curl-pushdown" },
+      { name: "Row Erg Finisher",       role: "erg", key: "erg-finisher", unit: "minutes" }
+    ]
+  }
+};
+
+// SFET weekly template — single week, no shift variants.
+// Session type: 'lift' | 'run' (variant: threshold/speed/long/easy) | 'swim' | 'ruck' | 'rest'
+const DAY_TEMPLATES = {
+  Mon: [ { slot: "AM", type: "lift", key: "upper-push" } ],
+  Tue: [ { slot: "AM", type: "run",  variant: "threshold" },
+         { slot: "PM", type: "swim" } ],
+  Wed: [ { slot: "AM", type: "lift", key: "upper-pull" } ],
+  Thu: [ { slot: "AM", type: "run",  variant: "speed" },
+         { slot: "PM", type: "lift", key: "upper-hyp" } ],
+  Fri: [ { slot: "AM", type: "lift", key: "lower-strength" } ],
+  Sat: [ { slot: "AM", type: "ruck" } ],
+  Sun: [ { slot: "AM", type: "run",  variant: "long" } ]
+};
+
+// Day-type drives the macro profile. Ruck/long-run days need carbs; lift days need protein.
+function dayTypeFor(iso) {
+  const meta = loadData().meta;
+  const rx = getPrescriptionForDate(iso, meta);
+  if (!rx.sessions || !rx.sessions.length) return "recovery";
+  let hasLift = false, hasBigEndurance = false;
+  for (const sess of rx.sessions) {
+    if (sess.type === "lift") hasLift = true;
+    if (sess.type === "ruck") hasBigEndurance = true;
+    if (sess.type === "run" && sess.cardio && sess.cardio.variant === "long") hasBigEndurance = true;
+    if (sess.type === "run" && sess.cardio && sess.cardio.variant === "threshold") hasBigEndurance = true;
+  }
+  if (hasLift) return "lift";
+  if (hasBigEndurance) return "endurance";
+  return "recovery";
+}
+
+const MACRO_PROFILE_LABELS = {
+  lift:      "Lift day",
+  endurance: "Endurance day",
+  recovery:  "Recovery day"
+};
+
+// ------------------------------------------------------------------
+// DATE HELPERS
+// ------------------------------------------------------------------
+
+function pad(n) { return n < 10 ? "0" + n : "" + n; }
+
+function isoDate(d) {
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+
+function parseISO(s) {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function todayISO() { return isoDate(new Date()); }
+
+function addDays(iso, n) {
+  const d = parseISO(iso);
+  d.setDate(d.getDate() + n);
+  return isoDate(d);
+}
+
+function daysBetween(a, b) {
+  return Math.floor((parseISO(b) - parseISO(a)) / 86400000);
+}
+
+function dayOfWeekName(iso) {
+  const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return names[parseISO(iso).getDay()];
+}
+
+function fullDayName(iso) {
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  return names[parseISO(iso).getDay()];
+}
+
+function mondayOf(iso) {
+  const d = parseISO(iso);
+  const dow = d.getDay();
+  const diff = dow === 0 ? -6 : 1 - dow;
+  d.setDate(d.getDate() + diff);
+  return isoDate(d);
+}
+
+function formatPrettyDate(iso) {
+  const d = parseISO(iso);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${dayOfWeekName(iso)} ${d.getDate()} ${months[d.getMonth()]}`;
+}
+
+function monthLabel(year, monthZeroIdx) {
+  const months = ["January", "February", "March", "April", "May", "June",
+                  "July", "August", "September", "October", "November", "December"];
+  return `${months[monthZeroIdx]} ${year}`;
+}
+
+// ------------------------------------------------------------------
+// PROGRAM CALCULATION
+// ------------------------------------------------------------------
+
+// SFET program week — indexed from sfetStartDate (Mon of week 1).
+function weekNumberFor(iso, meta) {
+  const startMon = mondayOf(meta.sfetStartDate || meta.startDate);
+  const thisMon = mondayOf(iso);
+  const weeks = Math.floor(daysBetween(startMon, thisMon) / 7);
+  return weeks + 1;
+}
+
+function getPhase(weekNum) {
+  if (weekNum < 1) return null;
+  for (const p of PHASES) {
+    if (weekNum >= p.startWeek && weekNum <= p.endWeek) return p;
+  }
+  return PHASES[PHASES.length - 1]; // post-program — hold Peak prescription
+}
+
+function getMesoInfo(weekNum, phase) {
+  const phaseWeek = weekNum - phase.startWeek + 1;
+  const meso = Math.floor((phaseWeek - 1) / 4) + 1;
+  const weekInMeso = ((phaseWeek - 1) % 4) + 1;
+  const isDeload = weekInMeso === 4;
+  return { phaseWeek, meso, weekInMeso, isDeload };
+}
+
+// Kept for backwards compat with old data / calendar UI — always "day" now.
+function getWeekType(iso, meta) {
+  return "day";
+}
+
+// Suggested reps for the week within mesocycle (build → push → deload)
+function repsForWeekInMeso(weekInMeso, repsLow, repsHigh) {
+  if (weekInMeso === 4) return repsLow; // deload — top of light
+  // Week 1: bottom of range, Week 2: middle, Week 3: top
+  const span = repsHigh - repsLow;
+  if (weekInMeso === 1) return repsLow;
+  if (weekInMeso === 2) return Math.round(repsLow + span * 0.5);
+  return repsHigh;
+}
+
+function rpeForWeekInMeso(weekInMeso, baseRpe) {
+  if (weekInMeso === 4) return Math.max(5, baseRpe - 2); // deload
+  if (weekInMeso === 1) return baseRpe - 0.5;
+  if (weekInMeso === 2) return baseRpe;
+  return Math.min(9.5, baseRpe + 0.5); // push week
+}
+
+function setsForWeekInMeso(weekInMeso, baseSets) {
+  if (weekInMeso === 4) return Math.max(2, Math.ceil(baseSets / 2)); // deload halves sets
+  return baseSets;
+}
+
+// Get prescribed sessions for a given date. Pre-SFET dates return no sessions
+// (weight/meal logs on those days still viewable — this only gates program prescription).
+function getPrescriptionForDate(iso, meta) {
+  const sfetStart = meta.sfetStartDate || meta.startDate;
+  if (iso < sfetStart) {
+    return { sessions: [], phase: null, meso: null, weekType: null, weekNum: 0, preSfet: true };
+  }
+  const weekNum = weekNumberFor(iso, meta);
+  const phase = getPhase(weekNum);
+  const mesoInfo = getMesoInfo(weekNum, phase);
+  const dow = dayOfWeekName(iso);
+  const dayTemplate = DAY_TEMPLATES[dow] || [];
+  const rx = PHASE_PRESCRIPTION[phase.id];
+
+  const sessions = dayTemplate.map((s, idx) => {
+    const sess = {
+      id: `${dow}-${idx}-${s.type}-${s.key || s.variant || "x"}`,
+      type: s.type, slot: s.slot
+    };
+    if (s.type === "lift") {
+      const tmpl = LIFT_TEMPLATES[s.key];
+      sess.name = tmpl.name;
+      sess.key = s.key;
+      sess.exercises = tmpl.exercises.map(ex => {
+        if (ex.role === "cadence") {
+          const cad = rx.cadence;
+          const sets = mesoInfo.isDeload ? Math.max(2, Math.ceil(cad.sets / 2)) : cad.sets;
+          return {
+            name: ex.name, key: ex.key, role: "cadence",
+            unit: "reps",
+            sets,
+            reps: cad.pct === 1.0 ? "MAX" : `~${Math.round(cad.pct * 100)}% of PR`,
+            rpe: cad.pct === 1.0 ? 10 : 8,
+            repsRange: cad.note,
+            note: cad.note
+          };
+        }
+        if (ex.role === "erg") {
+          const e = rx.erg;
+          return {
+            name: ex.name, key: ex.key, role: "erg",
+            unit: "minutes",
+            sets: 1,
+            reps: e.durationMin,
+            rpe: 7,
+            repsRange: e.note,
+            note: e.note
+          };
+        }
+        const role = rx[ex.role];
+        // Time- and distance-based work can't use the role's rep range (an 8-second
+        // plank or an 8-metre carry is meaningless), so the exercise supplies its own.
+        const low  = ex.low  != null ? ex.low  : role.repsLow;
+        const high = ex.high != null ? ex.high : role.repsHigh;
+        const sets = setsForWeekInMeso(mesoInfo.weekInMeso, role.sets);
+        const reps = repsForWeekInMeso(mesoInfo.weekInMeso, low, high);
+        const rpe = rpeForWeekInMeso(mesoInfo.weekInMeso, role.baseRpe);
+        return {
+          name: ex.name, key: ex.key, role: ex.role,
+          unit: ex.unit || "kg",
+          perSide: !!ex.perSide,
+          sets, reps, rpe,
+          repsRange: `${low}-${high}`
+        };
+      });
+    } else if (s.type === "run") {
+      const variant = s.variant;
+      if (variant === "long") {
+        const long = rx.longRun;
+        const forceEasy = mesoInfo.isDeload;
+        sess.name = "Long Run";
+        sess.cardio = {
+          variant: "long",
+          distanceKm: mesoInfo.isDeload ? Math.round(long.distanceKm * 0.7) : long.distanceKm,
+          targetType: forceEasy ? "easy" : long.type,
+          note: forceEasy ? "Deload — all Z2 / conversational" : long.note
+        };
+      } else if (variant === "threshold") {
+        const t = rx.thresholdRun;
+        sess.name = "Threshold Run";
+        sess.cardio = {
+          variant: "threshold",
+          durationMin: mesoInfo.isDeload ? Math.round(t.durationMin * 0.6) : t.durationMin,
+          targetType: "threshold",
+          paceHint: t.paceHint,
+          note: mesoInfo.isDeload ? "Deload — halve volume, easier pace" : t.note
+        };
+      } else if (variant === "speed") {
+        const sp = rx.speedIntervals;
+        const isDeload = mesoInfo.isDeload;
+        sess.name = "Speed Intervals";
+        sess.cardio = {
+          variant: "speed",
+          reps: isDeload ? Math.max(3, Math.floor(sp.reps / 2)) : sp.reps,
+          distanceM: sp.distanceM,
+          paceHint: sp.paceHint,
+          rest: sp.rest,
+          note: isDeload ? "Deload — half the reps, hold pace" : sp.note
+        };
+      } else if (variant === "easy") {
+        sess.name = "Easy Run";
+        sess.cardio = {
+          variant: "easy",
+          durationMin: rx.easyRun.durationMin,
+          targetType: "easy",
+          note: rx.easyRun.note
+        };
+      }
+    } else if (s.type === "swim") {
+      sess.name = "Kit Swim";
+      sess.cardio = {
+        variant: "swim",
+        distanceKm: rx.swim.distanceKm,
+        targetType: "kit",
+        note: rx.swim.note
+      };
+    } else if (s.type === "ruck") {
+      const r = rx.ruck;
+      const isDeload = mesoInfo.isDeload;
+      sess.name = "Ruck March";
+      sess.ruck = {
+        distanceKm: isDeload ? Math.max(4, Math.round(r.distanceKm * 0.6)) : r.distanceKm,
+        loadKg:     isDeload ? Math.max(8, Math.round(r.loadKg * 0.6))    : r.loadKg,
+        paceHint:   r.paceHint,
+        note:       isDeload ? "Deload - lighter load, shorter distance" : r.note,
+        formCues:   RUCK_FORM_CUES
+      };
+    } else if (s.type === "rest") {
+      sess.name = "Rest Day";
+    }
+    return sess;
+  });
+
+  return { sessions, phase, meso: mesoInfo, weekType: "day", weekNum };
+}
+
+// ------------------------------------------------------------------
+// STORAGE
+// ------------------------------------------------------------------
+
+let _cachedData = null;
+
+function loadData() {
+  if (_cachedData) return _cachedData;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      _cachedData = JSON.parse(raw);
+      _cachedData.meta = Object.assign({}, DEFAULT_META, _cachedData.meta || {});
+      _cachedData.days = _cachedData.days || {};
+      _cachedData.shiftRoster = _cachedData.shiftRoster || {};
+      _cachedData.favorites = _cachedData.favorites || [];
+      _cachedData.standardsLog = _cachedData.standardsLog || {};
+      _cachedData.schemaVersion = SCHEMA_VERSION;
+      ensureRecentsSeeded(_cachedData);
+      ensureSfetMigrated(_cachedData);
+      ensurePhase2Migrated(_cachedData);
+      normaliseMacroProfiles(_cachedData);
+      ensureBuilderMigrated(_cachedData);
+      ensureHiitMigrated(_cachedData);
+      return _cachedData;
+    }
+  } catch (e) {
+    console.error("Failed to parse stored data", e);
+  }
+  _cachedData = {
+    schemaVersion: SCHEMA_VERSION,
+    meta: Object.assign({}, DEFAULT_META),
+    shiftRoster: {},
+    favorites: [],
+    days: {},
+    recents: { morning: [], arvo: [], dinner: [] },
+    standardsLog: {},
+    exerciseLibrary: {},
+    workoutTemplates: [],
+    builderDraft: null,
+    hiitWorkouts: [],
+    hiitMovements: {},
+    hiitDraft: null,
+    _sfetMigrated: true,
+    _phase2Migrated: true,
+    _builderMigrated: true,
+    _hiitMigrated: true
+  };
+  return _cachedData;
+}
+
+// One-time migration: pivot existing users from recomp program to SFET prep.
+// Sets sfetStartDate + targetDate, seeds Sam's known pull-up baseline.
+function ensureSfetMigrated(data) {
+  if (data._sfetMigrated) return;
+  data.meta.sfetStartDate = "2026-09-07";
+  data.meta.targetDate = "2027-03-07";
+  data._sfetMigrated = true;
+}
+
+// Oct 2026 pivot: maintenance phase at ~72kg, per-day macro profiles, hypertrophy block.
+// The old 1775 kcal / 67 kg targets were driving a deficit that had already stalled.
+function ensurePhase2Migrated(data) {
+  if (data._phase2Migrated) return;
+  data.meta.targetWeightKg = 72;
+  data.meta.dailyCalorieTarget = 2600;
+  if (!data.meta.macroProfiles) {
+    data.meta.macroProfiles = JSON.parse(JSON.stringify(DEFAULT_META.macroProfiles));
+  }
+  if (data.meta.predictorEnabled == null) data.meta.predictorEnabled = true;
+  if (data.meta.foodEnabled == null) data.meta.foodEnabled = true;
+  data._phase2Migrated = true;
+}
+
+// Workout builder arrived in schema v2. Purely additive - existing Gym entries
+// have no `builder` flag and keep rendering and exporting exactly as before.
+function ensureBuilderMigrated(data) {
+  if (!data.exerciseLibrary)  data.exerciseLibrary = {};
+  if (!data.workoutTemplates) data.workoutTemplates = [];
+  if (data.builderDraft === undefined) data.builderDraft = null;
+  data._builderMigrated = true;
+}
+
+// HIIT builder arrived in schema v3. Additive only - existing HIIT entries
+// have no `hiit` flag and keep rendering, totalling and exporting as before.
+function ensureHiitMigrated(data) {
+  if (!data.hiitWorkouts)  data.hiitWorkouts = [];
+  if (!data.hiitMovements) data.hiitMovements = {};
+  if (data.hiitDraft === undefined) data.hiitDraft = null;
+  if (data.meta.hiitLoadSex == null) data.meta.hiitLoadSex = data.meta.sex || "male";
+  data._hiitMigrated = true;
+}
+
+// Fill in any profile keys a stored dataset predates.
+function normaliseMacroProfiles(data) {
+  const def = DEFAULT_META.macroProfiles;
+  if (!data.meta.macroProfiles) {
+    data.meta.macroProfiles = JSON.parse(JSON.stringify(def));
+    return;
+  }
+  for (const k of Object.keys(def)) {
+    if (!data.meta.macroProfiles[k]) {
+      data.meta.macroProfiles[k] = Object.assign({}, def[k]);
+    } else {
+      data.meta.macroProfiles[k] = Object.assign({}, def[k], data.meta.macroProfiles[k]);
+    }
+  }
+}
+
+// The day's live macro targets, chosen by what is programmed that day.
+function activeMacroTargets(iso) {
+  const data = loadData();
+  normaliseMacroProfiles(data);
+  const t = dayTypeFor(iso);
+  const p = data.meta.macroProfiles[t] || data.meta.macroProfiles.lift;
+  return Object.assign({ dayType: t, dayLabel: MACRO_PROFILE_LABELS[t] || t }, p);
+}
+
+// Seed per-section recents from existing meal log history so previously-logged
+// items are immediately available in the new UI. Runs once per stored dataset.
+function ensureRecentsSeeded(data) {
+  if (data.recents && data._recentsSeeded) {
+    for (const s of ["morning", "arvo", "dinner"]) {
+      if (!data.recents[s]) data.recents[s] = [];
+    }
+    return;
+  }
+  const recents = data.recents || { morning: [], arvo: [], dinner: [] };
+  for (const s of ["morning", "arvo", "dinner"]) {
+    if (!recents[s]) recents[s] = [];
+  }
+  const dates = Object.keys(data.days || {}).sort();
+  for (const iso of dates) {
+    const day = data.days[iso];
+    if (!day || !day.meals) continue;
+    const ts = parseISO(iso).getTime();
+    for (const section of ["morning", "arvo", "dinner"]) {
+      const entries = day.meals[section] || [];
+      for (const e of entries) {
+        upsertRecent(recents[section], e, ts);
+      }
+    }
+  }
+  data.recents = recents;
+  data._recentsSeeded = true;
+}
+
+// Dedup key = trimmed, lowercased name. Latest kcal + latest timestamp win.
+function upsertRecent(sectionArr, entry, timestamp) {
+  const clean = ((entry && entry.name) || "").trim();
+  if (!clean) return;
+  const key = clean.toLowerCase();
+  const existing = sectionArr.find(r => r.name.trim().toLowerCase() === key);
+  const target = existing || { name: clean, lastUsed: 0 };
+  target.name = clean;
+  target.kcal = entry.kcal;
+  // Carry macros so quick-add from the dropdown reuses them
+  for (const m of MACRO_FIELDS) {
+    if (entry[m.key] != null) target[m.key] = entry[m.key];
+    else delete target[m.key];
+  }
+  target.lastUsed = Math.max(target.lastUsed || 0, timestamp);
+  if (!existing) sectionArr.push(target);
+}
+
+function bumpRecent(section, entry, timestamp) {
+  const data = loadData();
+  if (!data.recents[section]) data.recents[section] = [];
+  upsertRecent(data.recents[section], entry, timestamp || Date.now());
+  saveData();
+}
+
+function getSectionRecents(section) {
+  const data = loadData();
+  const arr = (data.recents && data.recents[section]) || [];
+  return arr.slice().sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
+}
+
+// ------------------------------------------------------------------
+// EXTRA SESSIONS — user-logged bonus activity per day
+// ------------------------------------------------------------------
+
+// Field bitmap per type: name, variant, durationMin, distanceKm, loadKg
+const EXTRA_TYPES = [
+  { key: "run",  label: "Run",  variants: ["easy","threshold","tempo","speed","long","race","other"],
+    fields: { variant: true, distanceKm: true, durationMin: true, hrAvg: true } },
+  { key: "swim", label: "Swim",
+    fields: { distanceKm: true, durationMin: true } },
+  { key: "gym",  label: "Gym",
+    fields: { name: true, durationMin: true } },
+  { key: "hiit", label: "HIIT",
+    fields: { name: true, durationMin: true, hrAvg: true } },
+  { key: "bike", label: "Bike",
+    fields: { distanceKm: true, durationMin: true, hrAvg: true } },
+  { key: "ruck", label: "Ruck",
+    fields: { distanceKm: true, loadKg: true, durationMin: true } }
+];
+
+function getExtraSessions(iso) {
+  const day = getDay(iso);
+  if (!day.extraSessions) day.extraSessions = [];
+  return day.extraSessions;
+}
+
+function addExtraSession(iso, entry) {
+  const list = getExtraSessions(iso);
+  const id = "extra-" + uid();
+  list.push(Object.assign({
+    id,
+    type: entry.type,
+    createdAt: Date.now(),
+    completed: true   // logging one means it happened
+  }, entry));
+  saveData();
+  return id;
+}
+
+function updateExtraSession(iso, id, patch) {
+  const list = getExtraSessions(iso);
+  const item = list.find(e => e.id === id);
+  if (item) { Object.assign(item, patch); saveData(); }
+}
+
+function deleteExtraSession(iso, id) {
+  const day = getDay(iso);
+  day.extraSessions = (day.extraSessions || []).filter(e => e.id !== id);
+  saveData();
+}
+
+function describeExtra(e) {
+  if (e.hiit && e.result) {
+    const bits = [formatResult(e.format, e.result), (e.scaling || "rx").toUpperCase()];
+    if (e.durationMin != null)  bits.push(e.durationMin + "min");
+    if (e.effortRating != null) bits.push("effort " + e.effortRating + "/10");
+    return bits.join(" \u00b7 ");
+  }
+  if (e.builder && e.exercises) {
+    const n = Object.keys(e.exercises).length;
+    const sets = Object.keys(e.exercises)
+      .reduce((a, k) => a + (e.exercises[k].setsLogged || []).length, 0);
+    const bits = [n + (n === 1 ? " exercise" : " exercises"), sets + " sets"];
+    if (e.durationMin != null) bits.push(e.durationMin + "min");
+    if (e.effortRating != null) bits.push("effort " + e.effortRating + "/10");
+    return bits.join(" \u00b7 ");
+  }
+  const parts = [];
+  if (e.type === "run" && e.variant) parts.push(cap(e.variant));
+  if (e.distanceKm != null) parts.push(e.distanceKm + "km");
+  if (e.loadKg != null)     parts.push(e.loadKg + "kg");
+  if (e.durationMin != null) parts.push(e.durationMin + "min");
+  if (e.hrAvg != null)       parts.push(e.hrAvg + " bpm");
+  return parts.join(" · ") || "no details";
+}
+
+function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ""; }
+
+function defaultExtraName(type, variant) {
+  const t = EXTRA_TYPES.find(x => x.key === type);
+  if (type === "run" && variant) return cap(variant) + " Run";
+  return t ? t.label : "";
+}
+
+// ------------------------------------------------------------------
+// SFET STANDARDS — logging + formatting
+// ------------------------------------------------------------------
+
+function getStandardsLog(id) {
+  const data = loadData();
+  return (data.standardsLog && data.standardsLog[id]) || [];
+}
+
+function getLatestStandard(id) {
+  const arr = getStandardsLog(id);
+  if (!arr.length) return null;
+  return arr.slice().sort((a, b) => a.date.localeCompare(b.date)).slice(-1)[0];
+}
+
+function addStandardEntry(id, entry) {
+  const data = loadData();
+  if (!data.standardsLog) data.standardsLog = {};
+  if (!data.standardsLog[id]) data.standardsLog[id] = [];
+  data.standardsLog[id].push({ date: entry.date, value: entry.value, notes: entry.notes || "" });
+  saveData();
+}
+
+function deleteStandardEntry(id, index) {
+  const data = loadData();
+  if (data.standardsLog && data.standardsLog[id]) {
+    data.standardsLog[id].splice(index, 1);
+    saveData();
+  }
+}
+
+function parseTimeToSeconds(s) {
+  if (s == null || s === "") return null;
+  const str = String(s).trim();
+  if (/^\d+$/.test(str)) return parseInt(str, 10);              // bare seconds
+  const m = str.match(/^(\d+):([0-5]?\d)$/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+function formatSecondsToTime(sec) {
+  if (sec == null || !Number.isFinite(sec)) return "—";
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${s < 10 ? "0" + s : s}`;
+}
+
+function formatStandardValue(id, value) {
+  const spec = SFET_STANDARDS.find(x => x.id === id);
+  if (!spec || value == null) return "—";
+  if (spec.unit === "time") return formatSecondsToTime(value);
+  if (spec.unit === "km")   return value + " km";
+  return value + " reps";
+}
+
+// Percent progress from a chosen baseline (0-reps for higherBetter, standards.min for time)
+// toward the "min" and "comp" thresholds. Used to color a progress bar.
+function standardStatus(id, value) {
+  const spec = SFET_STANDARDS.find(x => x.id === id);
+  if (!spec || value == null) return { label: "not tested", cls: "" };
+  const passesMin  = spec.higherBetter ? value >= spec.min  : value <= spec.min;
+  const passesComp = spec.higherBetter ? value >= spec.comp : value <= spec.comp;
+  if (passesComp) return { label: "competitive", cls: "delta-good" };
+  if (passesMin)  return { label: "meets min",   cls: "delta-warn" };
+  return { label: "below min", cls: "delta-bad" };
+}
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+function getMealsForDay(iso) {
+  const day = getDay(iso);
+  if (!day.meals) day.meals = { morning: [], arvo: [], dinner: [] };
+  for (const s of ["morning", "arvo", "dinner"]) {
+    if (!day.meals[s]) day.meals[s] = [];
+  }
+  return day.meals;
+}
+
+function addMealEntry(iso, section, entry) {
+  const meals = getMealsForDay(iso);
+  const rec = { id: uid(), name: entry.name, kcal: entry.kcal };
+  for (const m of MACRO_FIELDS) {
+    if (entry[m.key] != null) rec[m.key] = entry[m.key];
+  }
+  meals[section].push(rec);
+  bumpRecent(section, rec);
+  saveData();
+}
+
+function updateMealEntry(iso, section, id, patch) {
+  const meals = getMealsForDay(iso);
+  const item = meals[section].find(e => e.id === id);
+  if (item) {
+    Object.assign(item, patch);
+    // An explicit null in the patch means "macro cleared" — drop the key entirely
+    for (const m of MACRO_FIELDS) {
+      if (patch[m.key] === null) delete item[m.key];
+    }
+    bumpRecent(section, item);
+    saveData();
+  }
+}
+
+function macrosEnabled() {
+  return loadData().meta.macrosEnabled === true;
+}
+
+function dayMacroTotals(iso) {
+  const meals = getMealsForDay(iso);
+  const t = { proteinG: 0, carbsG: 0, fatG: 0, hasAny: false };
+  for (const s of ["morning", "arvo", "dinner"]) {
+    for (const e of meals[s]) {
+      for (const m of MACRO_FIELDS) {
+        if (e[m.key] != null) { t[m.key] += e[m.key]; t.hasAny = true; }
+      }
+    }
+  }
+  return t;
+}
+
+// Derived calories from whatever macros are present. Null when none are set.
+function kcalFromMacros(entry) {
+  let sum = 0, any = false;
+  for (const m of MACRO_FIELDS) {
+    const v = entry[m.key];
+    if (v != null && Number.isFinite(v)) { sum += v * m.kcalPerG; any = true; }
+  }
+  return any ? Math.round(sum) : null;
+}
+
+function macroSummary(e) {
+  const parts = [];
+  for (const m of MACRO_FIELDS) {
+    if (e[m.key] != null) parts.push(m.short + " " + Math.round(e[m.key]) + "g");
+  }
+  return parts.join(" · ");
+}
+
+function deleteMealEntry(iso, section, id) {
+  const meals = getMealsForDay(iso);
+  meals[section] = meals[section].filter(e => e.id !== id);
+  saveData();
+}
+
+function getFavorites() {
+  return loadData().favorites;
+}
+
+function addFavorite(entry) {
+  const data = loadData();
+  data.favorites.push({ id: uid(), name: entry.name, kcal: entry.kcal });
+  saveData();
+}
+
+function deleteFavorite(id) {
+  const data = loadData();
+  data.favorites = data.favorites.filter(f => f.id !== id);
+  saveData();
+}
+
+function updateFavorite(id, patch) {
+  const data = loadData();
+  const f = data.favorites.find(x => x.id === id);
+  if (f) { Object.assign(f, patch); saveData(); }
+}
+
+function dayTotalKcal(iso) {
+  const meals = getMealsForDay(iso);
+  let sum = 0;
+  for (const s of ["morning", "arvo", "dinner"]) {
+    for (const e of meals[s]) sum += (e.kcal || 0);
+  }
+  return sum;
+}
+
+function sectionTotalKcal(iso, section) {
+  const meals = getMealsForDay(iso);
+  return meals[section].reduce((s, e) => s + (e.kcal || 0), 0);
+}
+
+function saveData() {
+  if (!_cachedData) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(_cachedData));
+  } catch (e) {
+    showToast("⚠ Save failed — storage full?");
+    console.error(e);
+  }
+}
+
+function getDay(iso) {
+  const data = loadData();
+  if (!data.days[iso]) {
+    data.days[iso] = {
+      date: iso,
+      weightKg: null,
+      activeCaloriesKcal: null,
+      dayComplete: false,
+      dayNotes: "",
+      sessions: {}
+    };
+  }
+  return data.days[iso];
+}
+
+function getSessionLog(iso, sessionId) {
+  const day = getDay(iso);
+  if (!day.sessions[sessionId]) {
+    day.sessions[sessionId] = {
+      completed: false,
+      notes: "",
+      exercises: {},
+      actualDurationMin: null,
+      actualDistanceKm: null,
+      actualHrAvg: null
+    };
+  }
+  return day.sessions[sessionId];
+}
+
+function getExerciseLog(iso, sessionId, exerciseKey) {
+  const sess = getSessionLog(iso, sessionId);
+  if (!sess.exercises[exerciseKey]) {
+    sess.exercises[exerciseKey] = {
+      setsLogged: [],
+      completed: false,
+      notes: ""
+    };
+  }
+  return sess.exercises[exerciseKey];
+}
+
+// ------------------------------------------------------------------
+// SUGGESTED WEIGHT (double-progression based on recent history)
+// ------------------------------------------------------------------
+
+function findLastLoggedExercise(exerciseKey, beforeIso, maxLookbackDays = 60) {
+  const data = loadData();
+  const dates = Object.keys(data.days).sort().reverse();
+  for (const iso of dates) {
+    if (iso >= beforeIso) continue;
+    if (daysBetween(iso, beforeIso) > maxLookbackDays) break;
+    const day = data.days[iso];
+    for (const sid in day.sessions) {
+      const sess = day.sessions[sid];
+      if (sess.exercises && sess.exercises[exerciseKey]) {
+        const ex = sess.exercises[exerciseKey];
+        if (ex.setsLogged && ex.setsLogged.length) {
+          return { iso, sessionId: sid, ex };
+        }
+      }
+    }
+    // Builder/extra sessions share exercise keys, so they count as history too
+    for (const es of (day.extraSessions || [])) {
+      if (es.exercises && es.exercises[exerciseKey]) {
+        const ex = es.exercises[exerciseKey];
+        if (ex.setsLogged && ex.setsLogged.length) {
+          return { iso, sessionId: es.id, ex };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function suggestWeight(exerciseKey, targetReps, targetRpe, role, iso) {
+  const prev = findLastLoggedExercise(exerciseKey, iso);
+  if (!prev) return null;
+  const sets = prev.ex.setsLogged.filter(s => s.weightKg != null);
+  if (!sets.length) return null;
+  // Use the heaviest top-set weight from last session as baseline
+  const maxWt = Math.max(...sets.map(s => s.weightKg));
+  // Check if last session hit top of range at target RPE
+  const topReps = Math.max(...sets.filter(s => s.weightKg === maxWt).map(s => s.reps || 0));
+  const topRpe  = Math.min(...sets.filter(s => s.weightKg === maxWt && s.rpe).map(s => s.rpe));
+  // Increment if user hit top reps at <= target RPE
+  let inc = 0;
+  if (topReps >= targetReps && (!topRpe || topRpe <= targetRpe)) {
+    // Lower-body lifts add more; upper less
+    const isLower = ["back-squat", "rdl", "deadlift", "bss", "hip-thrust", "walking-lunges"].includes(exerciseKey);
+    inc = isLower ? 2.5 : (role === "mainLift" ? 2.5 : 1.25);
+  }
+  return Math.round((maxWt + inc) * 4) / 4; // round to nearest 0.25
+}
+
+// ------------------------------------------------------------------
+// ROLLING METRICS
+// ------------------------------------------------------------------
+
+function rollingAvg(series, windowDays) {
+  // series: [{date, value}] sorted ascending. Returns same array with .avg added.
+  return series.map((pt, i) => {
+    const cutoff = addDays(pt.date, -windowDays + 1);
+    const window = series.filter(p => p.date >= cutoff && p.date <= pt.date && p.value != null);
+    if (!window.length) return Object.assign({}, pt, { avg: null });
+    const avg = window.reduce((s, p) => s + p.value, 0) / window.length;
+    return Object.assign({}, pt, { avg });
+  });
+}
+
+function weightSeries() {
+  const data = loadData();
+  return Object.values(data.days)
+    .filter(d => d.weightKg != null)
+    .map(d => ({ date: d.date, value: d.weightKg }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function caloriesSeries() {
+  const data = loadData();
+  return Object.values(data.days)
+    .filter(d => d.activeCaloriesKcal != null)
+    .map(d => ({ date: d.date, value: d.activeCaloriesKcal }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function currentRollingWeight() {
+  const series = rollingAvg(weightSeries(), 7);
+  if (!series.length) return null;
+  return series[series.length - 1].avg;
+}
+
+function paceAnalysis() {
+  const data = loadData();
+  const meta = data.meta;
+  const series = rollingAvg(weightSeries(), 7);
+  if (series.length < 2) return null;
+  const todayIso = todayISO();
+  const remainingDays = Math.max(1, daysBetween(todayIso, meta.targetDate));
+  const remainingWeeks = remainingDays / 7;
+  const currentWt = series[series.length - 1].avg;
+  const remainingKg = currentWt - meta.targetWeightKg;
+  const requiredRate = remainingKg / remainingWeeks;
+  // Actual rate over last ~28 days
+  const recent = series.filter(p => daysBetween(p.date, todayIso) <= 28);
+  let actualRate = null;
+  if (recent.length >= 2) {
+    const first = recent[0];
+    const last = recent[recent.length - 1];
+    const days = daysBetween(first.date, last.date);
+    if (days > 0) actualRate = (first.avg - last.avg) / days * 7; // kg/week (positive = losing)
+  }
+  return { currentWt, remainingKg, remainingWeeks, requiredRate, actualRate };
+}
+
+// Mifflin-St Jeor BMR — validated within ~10% of measured RMR for most healthy adults.
+// Recalculated per-day from the latest weigh-in on or before that date.
+function calculateBMR(weightKg, heightCm, age, sex) {
+  if (!Number.isFinite(weightKg) || !Number.isFinite(heightCm) || !Number.isFinite(age)) return null;
+  const base = 10 * weightKg + 6.25 * heightCm - 5 * age;
+  return sex === "female" ? base - 161 : base + 5;
+}
+
+function profileComplete() {
+  const m = loadData().meta;
+  return Number.isFinite(m.age) && Number.isFinite(m.heightCm) && (m.sex === "male" || m.sex === "female");
+}
+
+// Latest weight on or before iso — BMR should never use a stale profile weight.
+function latestWeightOnOrBefore(iso) {
+  const series = weightSeries();
+  let latest = null;
+  for (const p of series) {
+    if (p.date <= iso) latest = p.value;
+  }
+  return latest;
+}
+
+function bmrForDate(iso) {
+  const meta = loadData().meta;
+  if (!profileComplete()) return null;
+  const wt = latestWeightOnOrBefore(iso);
+  if (wt == null) return null;
+  return calculateBMR(wt, meta.heightCm, meta.age, meta.sex);
+}
+
+// Total calories out = BMR + active calories logged for that day.
+// Requires: profile complete, weigh-in on or before date, active calories logged for date.
+function dailyCalsOut(iso) {
+  const day = loadData().days[iso];
+  if (!day || day.activeCaloriesKcal == null) return null;
+  const bmr = bmrForDate(iso);
+  if (bmr == null) return null;
+  return bmr + day.activeCaloriesKcal;
+}
+
+// Daily deficit = cals out − cals in. Returns null if any input is missing —
+// callers prorate missing days rather than treating them as zero deficit.
+function dailyDeficit(iso) {
+  const day = loadData().days[iso];
+  if (!day) return null;
+  const out = dailyCalsOut(iso);
+  if (out == null) return null;
+  const meals = getMealsForDay(iso);
+  const anyMealLogged = meals.morning.length + meals.arvo.length + meals.dinner.length > 0;
+  if (!anyMealLogged) return null;
+  const calsIn = dayTotalKcal(iso);
+  return out - calsIn;
+}
+
+// Weekly deficit over the 7 days ending on endIso, prorated for incomplete days.
+// Returns { deficit, completeDays } or null when no days are complete.
+function weeklyDeficit(endIso) {
+  let sum = 0, complete = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = dailyDeficit(addDays(endIso, -i));
+    if (d != null) { sum += d; complete++; }
+  }
+  if (complete === 0) return null;
+  return { deficit: (sum / complete) * 7, completeDays: complete };
+}
+
+function predictedWeeklyLossKg(endIso) {
+  const w = weeklyDeficit(endIso);
+  if (w == null) return null;
+  return { kg: w.deficit / KCAL_PER_KG_FAT, completeDays: w.completeDays };
+}
+
+// Reuse the same rolling average the weight chart uses — no second smoothing method.
+function rolledAvgOnOrBefore(iso, rolledSeries) {
+  let latest = null;
+  for (const p of rolledSeries) {
+    if (p.date <= iso && p.avg != null) latest = p.avg;
+  }
+  return latest;
+}
+
+function actualWeeklyLossKg(endIso) {
+  const rolled = rollingAvg(weightSeries(), 7);
+  const thisWk = rolledAvgOnOrBefore(endIso, rolled);
+  const prevWk = rolledAvgOnOrBefore(addDays(endIso, -7), rolled);
+  if (thisWk == null || prevWk == null) return null;
+  return prevWk - thisWk;  // positive = weight decreased
+}
+
+function adherence(daysBack) {
+  const data = loadData();
+  const todayIso = todayISO();
+  const start = addDays(todayIso, -daysBack + 1);
+  let prescribed = 0, completed = 0;
+  for (let i = 0; i < daysBack; i++) {
+    const iso = addDays(start, i);
+    if (iso > todayIso) break;
+    const rx = getPrescriptionForDate(iso, data.meta);
+    const day = data.days[iso];
+    for (const s of rx.sessions) {
+      if (s.type === "rest") continue;
+      prescribed++;
+      if (day && day.sessions[s.id] && day.sessions[s.id].completed) completed++;
+    }
+  }
+  if (!prescribed) return null;
+  return Math.round((completed / prescribed) * 100);
+}
+
+// ------------------------------------------------------------------
+// STATE + ROUTING
+// ------------------------------------------------------------------
+
+let state = {
+  view: "today",
+  currentDate: todayISO(),
+  openSessions: {},
+  calendarMonth: (function() {
+    const d = new Date();
+    return { y: d.getFullYear(), m: d.getMonth() };
+  })()
+};
+
+function setView(v) {
+  state.view = v;
+  document.querySelectorAll("nav.tabs button").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.view === v);
+  });
+  render();
+}
+
+function setDate(iso) {
+  state.currentDate = iso;
+  render();
+}
+
+// ------------------------------------------------------------------
+// TOAST
+// ------------------------------------------------------------------
+
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 1800);
+}
+
+// ------------------------------------------------------------------
+// RENDERING — TOPBAR
+// ------------------------------------------------------------------
+
+function renderTopbar() {
+  const tb = document.getElementById("topbar");
+  if (state.view === "calendar" || state.view === "settings" || state.view === "stats" || state.view === "predictor") {
+    const title = state.view === "calendar" ? "Calendar" :
+                  state.view === "settings" ? "Settings" :
+                  state.view === "predictor" ? "Predictor" : "Stats";
+    tb.innerHTML = `
+      <div class="top-row">
+        <div style="flex:1">
+          <h1>${title}</h1>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  // Today or Nutrition view — both use date navigation
+  const data = loadData();
+  const iso = state.currentDate;
+  const isToday = iso === todayISO();
+
+  if (state.view === "nutrition") {
+    tb.innerHTML = `
+      <div class="top-row">
+        <button class="nav-btn" data-action="prev-day">‹</button>
+        <div class="date-block">
+          <div class="date">${isToday ? "Today · Food" : formatPrettyDate(iso)}</div>
+          <div class="sub">${isToday ? formatPrettyDate(iso) : "Food log"}</div>
+        </div>
+        <button class="nav-btn" data-action="next-day">›</button>
+      </div>
+    `;
+    tb.querySelector('[data-action="prev-day"]').onclick = () => setDate(addDays(iso, -1));
+    tb.querySelector('[data-action="next-day"]').onclick = () => setDate(addDays(iso, 1));
+    return;
+  }
+
+  const rx = getPrescriptionForDate(iso, data.meta);
+  tb.innerHTML = `
+    <div class="top-row">
+      <button class="nav-btn" data-action="prev-day">‹</button>
+      <div class="date-block">
+        <div class="date">${isToday ? "Today" : formatPrettyDate(iso)}</div>
+        <div class="sub">${isToday ? formatPrettyDate(iso) : ""}</div>
+      </div>
+      <button class="nav-btn" data-action="next-day">›</button>
+    </div>
+    <div class="phase-row">
+      ${rx.phase ? `<span class="pill phase-${rx.phase.id}">P${rx.phase.id} ${rx.phase.name}</span>` : ""}
+      ${rx.weekNum > 0 ? `<span class="pill">Wk ${rx.weekNum}/26</span>` : ""}
+      ${rx.meso ? `<span class="pill">Meso ${rx.meso.meso} · Wk ${rx.meso.weekInMeso}/4</span>` : ""}
+      ${rx.meso && rx.meso.isDeload ? `<span class="pill deload">Deload</span>` : ""}
+      ${rx.preSfet ? `<span class="pill">Pre-SFET</span>` : ""}
+    </div>
+  `;
+  tb.querySelector('[data-action="prev-day"]').onclick = () => setDate(addDays(iso, -1));
+  tb.querySelector('[data-action="next-day"]').onclick = () => setDate(addDays(iso, 1));
+}
+
+// ------------------------------------------------------------------
+// RENDERING — TODAY VIEW
+// ------------------------------------------------------------------
+
+function renderToday() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const iso = state.currentDate;
+  const rx = getPrescriptionForDate(iso, data.meta);
+  const day = data.days[iso] || null;
+
+  if (rx.preSfet || rx.weekNum <= 0) {
+    app.innerHTML = `
+      <div class="card">
+        <h2>Pre-SFET Program</h2>
+        <p class="muted" style="margin: 8px 0 0;">
+          SFET Base phase begins ${formatPrettyDate(data.meta.sfetStartDate || data.meta.startDate)}.
+          Weight and meal logs on this day are still saved — programmed sessions start on the SFET start date.
+        </p>
+      </div>
+      ${renderQuickEntryCard(iso, day)}
+    `;
+    wireQuickEntry(iso);
+    return;
+  }
+
+  let html = "";
+
+  // Setup banner if first run
+  if (!data.meta.setupComplete) {
+    html += `
+      <div class="setup-banner">
+        <h3>Welcome — quick setup</h3>
+        <p>Defaults are pre-filled with your stated values: 79kg → 69kg over 12 months. Head to Settings to confirm or adjust before starting. Once you log your first day, this banner disappears.</p>
+      </div>
+    `;
+  }
+
+  // Resume an interrupted workout
+  const _draft = getDraft();
+  if (_draft && _draft.exercises && _draft.exercises.length) {
+    html += `
+      <div class="resume-banner">
+        <div>
+          <div class="rb-text">Workout in progress</div>
+          <div class="rb-sub">${escapeHtml((_draft.category || "gym"))} \u00b7 ${_draft.exercises.length} exercises</div>
+        </div>
+        <button data-action="resume-workout">Resume</button>
+      </div>`;
+  }
+
+  // Quick entry
+  html += renderQuickEntryCard(iso, day);
+
+  // Prescribed sessions
+  html += `<div style="margin-top: 6px;"></div>`;
+  for (const s of rx.sessions) {
+    html += renderSessionCard(iso, s);
+  }
+
+  // Extra (user-logged) sessions
+  const extras = getExtraSessions(iso);
+  if (extras.length) {
+    html += `<div class="section-heading">Extra sessions</div>`;
+    for (const e of extras) {
+      html += renderExtraCard(iso, e);
+    }
+  }
+
+  // Add extra session button
+  html += `
+    <button class="add-extra-btn" data-action="add-extra">+ Log extra session</button>
+  `;
+
+  // Day complete button + notes (only prescribed sessions count for completion)
+  const allDone = rx.sessions.filter(s => s.type !== "rest").every(s => {
+    const sl = day && day.sessions[s.id];
+    return sl && sl.completed;
+  });
+  const isDayComplete = day && day.dayComplete;
+  html += `
+    <div class="card">
+      <label class="muted" style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;">Day notes</label>
+      <textarea class="notes-input" data-action="day-notes" placeholder="How did the day feel?">${(day && day.dayNotes) || ""}</textarea>
+      <button class="day-complete-btn ${isDayComplete ? "on" : ""}" data-action="toggle-day" ${(!allDone && !isDayComplete) ? "disabled" : ""}>
+        ${isDayComplete ? "✓ Day Complete" : allDone ? "Mark Day Complete" : "Tick all sessions first"}
+      </button>
+    </div>
+  `;
+
+  app.innerHTML = html;
+  wireToday(iso);
+}
+
+function renderQuickEntryCard(iso, day) {
+  const wt = day && day.weightKg != null ? day.weightKg : "";
+  const cal = day && day.activeCaloriesKcal != null ? day.activeCaloriesKcal : "";
+  return `
+    <div class="card">
+      <div class="quick-entry">
+        <div class="field">
+          <label>Weigh-in</label>
+          <input type="number" inputmode="decimal" step="0.1" min="40" max="200"
+                 data-action="set-weight" value="${wt}" placeholder="—">
+          <div class="unit">kg (AM, post-toilet)</div>
+        </div>
+        <div class="field">
+          <label>Active calories</label>
+          <input type="number" inputmode="numeric" step="1" min="0" max="3000"
+                 data-action="set-calories" value="${cal}" placeholder="—">
+          <div class="unit">kcal (from Garmin)</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSessionCard(iso, s) {
+  const sl = getSessionLog(iso, s.id);
+  const completed = sl.completed;
+
+  if (s.type === "rest") {
+    return `
+      <div class="session-card" data-type="rest" data-session-id="${s.id}">
+        <div class="session-head">
+          <div class="session-head-body">
+            <div class="session-tag">Rest</div>
+            <div class="name">Full Rest Day</div>
+            <div class="meta">No training. Sleep, eat, walk. Non-negotiable.</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  let body = "";
+  if (s.type === "lift") {
+    body += renderLiftBody(iso, s);
+  } else if (s.type === "run" || s.type === "swim") {
+    body += renderCardioBody(iso, s);
+  } else if (s.type === "ruck") {
+    body += renderRuckBody(iso, s);
+  }
+  body += `
+    <textarea class="notes-input" data-action="session-notes" data-session-id="${s.id}" placeholder="Session notes">${sl.notes || ""}</textarea>
+  `;
+
+  const meta = describeSession(s);
+
+  return `
+    <div class="session-card ${completed ? "completed" : ""}" data-type="${s.type}" data-session-id="${s.id}">
+      <div class="session-head" data-action="toggle-session-body">
+        <div class="session-head-body">
+          <div class="session-tag">${s.slot} · ${s.type.toUpperCase()}</div>
+          <div class="name">${s.name}</div>
+          <div class="meta">${meta}</div>
+        </div>
+        <div class="session-check ${completed ? "on" : ""}" data-action="toggle-session-complete">
+          ${completed ? "✓" : ""}
+        </div>
+      </div>
+      <div class="session-body ${state.openSessions[s.id] ? "" : "collapsed"}">${body}</div>
+    </div>
+  `;
+}
+
+function renderExtraCard(iso, e) {
+  const typeSpec = EXTRA_TYPES.find(x => x.key === e.type);
+  const label = e.name || defaultExtraName(e.type, e.variant);
+  const summary = describeExtra(e);
+  return `
+    <div class="session-card extra ${e.completed ? "completed" : ""}" data-type="${e.type}" data-extra-id="${e.id}">
+      <div class="session-head" data-action="edit-extra" data-extra-id="${e.id}">
+        <div class="session-head-body">
+          <div class="session-tag extra-tag">Extra · ${(typeSpec?.label || e.type).toUpperCase()}</div>
+          <div class="name">${escapeHtml(label)}</div>
+          <div class="meta">${escapeHtml(summary)}${e.notes ? ` · <span class="dim">${escapeHtml(e.notes)}</span>` : ""}</div>
+        </div>
+        <div class="session-check on">✓</div>
+      </div>
+    </div>
+  `;
+}
+
+function describeSession(s) {
+  if (s.type === "lift") {
+    return s.exercises.map(e => e.name).join(" · ");
+  }
+  if (s.type === "run") {
+    const c = s.cardio;
+    if (c.variant === "long")      return `${c.distanceKm}km · ${c.note}`;
+    if (c.variant === "threshold") return `${c.durationMin}min @ ${c.paceHint} · ${c.note}`;
+    if (c.variant === "speed")     return `${c.reps} × ${c.distanceM}m @ ${c.paceHint} · ${c.rest} rest`;
+    if (c.variant === "easy")      return `${c.durationMin}min · ${c.note}`;
+  }
+  if (s.type === "swim") {
+    return `${(s.cardio.distanceKm * 1000).toFixed(0)}m · ${s.cardio.note}`;
+  }
+  if (s.type === "ruck") {
+    return `${s.ruck.distanceKm}km @ ${s.ruck.loadKg}kg · ${s.ruck.paceHint}`;
+  }
+  return "";
+}
+
+function renderLiftBody(iso, s) {
+  let html = "";
+  for (const ex of s.exercises) {
+    const log = getExerciseLog(iso, s.id, ex.key);
+    // Only barbell/dumbbell work gets a load suggestion
+    const suggested = (!ex.unit || ex.unit === "kg")
+      ? suggestWeight(ex.key, ex.reps, ex.rpe, ex.role, iso) : null;
+    const rpeStr = typeof ex.rpe === "number"
+      ? ex.rpe.toFixed(1).replace(/\.0$/, "") : ex.rpe;
+    const side = ex.perSide ? " each side" : "";
+    const targetLabel =
+        ex.role === "erg"            ? `${ex.reps} min`
+      : ex.unit === "seconds"        ? `${ex.sets} × ${ex.reps}s hold${side}`
+      : ex.unit === "meters"         ? `${ex.sets} × ${ex.reps}m${side}`
+      : typeof ex.reps === "string"  ? `${ex.sets} × ${ex.reps}`
+      : `${ex.sets} × ${ex.reps} reps${side} @ RPE ${rpeStr}`;
+    const badge =
+        ex.role === "core" ? `<span class="ex-badge core">Core</span>`
+      : ex.role === "hyp"  ? `<span class="ex-badge hyp">Hypertrophy</span>`
+      : ex.role === "erg"  ? `<span class="ex-badge erg">Erg</span>`
+      : "";
+
+    html += `
+      <div class="exercise" data-exercise-key="${ex.key}" data-session-id="${s.id}">
+        <div class="exercise-head">
+          <div class="exercise-name">${ex.name}${badge}</div>
+          <div class="exercise-target">${targetLabel}</div>
+        </div>
+        ${ex.note ? `<div class="ex-note">${ex.note}</div>` : ""}
+        ${ex.unit !== "seconds" && suggested ? `<div class="suggested">Suggested: ${suggested}kg</div>` : ""}
+        <div class="set-row header">
+          <span>#</span><span>${
+            ex.unit === "seconds" ? "Sec" : ex.unit === "meters" ? "Metres" :
+            ex.unit === "minutes" ? "Min" : "Reps"
+          }</span><span>${
+            ex.unit === "minutes" ? "—" :
+            (ex.unit === "seconds" || ex.unit === "reps") ? "+kg" : "kg"
+          }</span><span>RPE</span><span></span>
+        </div>
+    `;
+    for (let i = 0; i < ex.sets; i++) {
+      const set = (log.setsLogged && log.setsLogged[i]) || {};
+      html += `
+        <div class="set-row" data-set-idx="${i}">
+          <div class="set-num">${i + 1}</div>
+          <input type="number" inputmode="numeric" step="1" min="0" max="999"
+                 data-field="reps" value="${set.reps != null ? set.reps : ""}" placeholder="${ex.reps}">
+          <input type="number" inputmode="decimal" step="0.25" min="0" max="500"
+                 data-field="weightKg" value="${set.weightKg != null ? set.weightKg : ""}" placeholder="${suggested || "—"}">
+          <input type="number" inputmode="decimal" step="0.5" min="1" max="10"
+                 data-field="rpe" value="${set.rpe != null ? set.rpe : ""}" placeholder="${ex.rpe}">
+          <div class="set-check ${set.completed ? "on" : ""}" data-action="toggle-set">${set.completed ? "✓" : ""}</div>
+        </div>
+      `;
+    }
+    html += `</div>`;
+  }
+  return html;
+}
+
+function renderCardioBody(iso, s) {
+  const log = getSessionLog(iso, s.id);
+  const c = s.cardio;
+  return `
+    <div style="padding-top: 12px;">
+      <div style="font-size: 13px; color: var(--muted); margin-bottom: 10px;">
+        Target: ${c.note}
+        ${c.distanceKm ? ` · ~${c.distanceKm}km` : ""}
+        ${c.durationMin ? ` · ~${c.durationMin}min` : ""}
+      </div>
+      <div class="cardio-log">
+        <div class="field">
+          <label>Distance (km)</label>
+          <input type="number" inputmode="decimal" step="0.1" min="0" max="50"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualDistanceKm"
+                 value="${log.actualDistanceKm != null ? log.actualDistanceKm : ""}" placeholder="${c.distanceKm || ""}">
+        </div>
+        <div class="field">
+          <label>Time (min)</label>
+          <input type="number" inputmode="numeric" step="1" min="0" max="300"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualDurationMin"
+                 value="${log.actualDurationMin != null ? log.actualDurationMin : ""}" placeholder="${c.durationMin || ""}">
+        </div>
+        <div class="field">
+          <label>Avg HR</label>
+          <input type="number" inputmode="numeric" step="1" min="40" max="220"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualHrAvg"
+                 value="${log.actualHrAvg != null ? log.actualHrAvg : ""}" placeholder="—">
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderRuckBody(iso, s) {
+  const log = getSessionLog(iso, s.id);
+  const r = s.ruck;
+  return `
+    <div style="padding-top: 12px;">
+      <div style="font-size: 13px; color: var(--muted); margin-bottom: 10px; line-height: 1.5;">
+        Target: <strong>${r.distanceKm}km @ ${r.loadKg}kg</strong> · pace ${r.paceHint}<br>
+        ${r.note}
+      </div>
+      ${r.formCues ? `
+        <details class="ruck-cues">
+          <summary>Form check — read before you load up</summary>
+          <ul>${r.formCues.map(c => `<li>${c}</li>`).join("")}</ul>
+        </details>
+      ` : ""}
+      <div class="cardio-log">
+        <div class="field">
+          <label>Distance (km)</label>
+          <input type="number" inputmode="decimal" step="0.1" min="0" max="30"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualDistanceKm"
+                 value="${log.actualDistanceKm != null ? log.actualDistanceKm : ""}" placeholder="${r.distanceKm}">
+        </div>
+        <div class="field">
+          <label>Load (kg)</label>
+          <input type="number" inputmode="decimal" step="0.5" min="0" max="60"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualLoadKg"
+                 value="${log.actualLoadKg != null ? log.actualLoadKg : ""}" placeholder="${r.loadKg}">
+        </div>
+        <div class="field">
+          <label>Time (min)</label>
+          <input type="number" inputmode="numeric" step="1" min="0" max="240"
+                 data-action="set-cardio" data-session-id="${s.id}" data-field="actualDurationMin"
+                 value="${log.actualDurationMin != null ? log.actualDurationMin : ""}" placeholder="—">
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function wireQuickEntry(iso) {
+  const wEl = document.querySelector('[data-action="set-weight"]');
+  if (wEl) wEl.addEventListener("change", e => {
+    const day = getDay(iso);
+    const v = parseFloat(e.target.value);
+    day.weightKg = Number.isFinite(v) ? v : null;
+    saveData();
+  });
+  const cEl = document.querySelector('[data-action="set-calories"]');
+  if (cEl) cEl.addEventListener("change", e => {
+    const day = getDay(iso);
+    const v = parseInt(e.target.value, 10);
+    day.activeCaloriesKcal = Number.isFinite(v) ? v : null;
+    saveData();
+  });
+}
+
+function wireToday(iso) {
+  wireQuickEntry(iso);
+
+  const resumeBtn = document.querySelector('[data-action="resume-workout"]');
+  if (resumeBtn) resumeBtn.addEventListener("click", () => {
+    const d = getDraft();
+    openBuilder(d.iso || iso, "menu");
+  });
+
+  // Extra sessions: add + edit
+  const addExtraBtn = document.querySelector('[data-action="add-extra"]');
+  if (addExtraBtn) addExtraBtn.addEventListener("click", () => openExtraModal(iso, null));
+  document.querySelectorAll('[data-action="edit-extra"]').forEach(el => {
+    el.addEventListener("click", () => {
+      const es = getExtraSessions(iso).find(x => x.id === el.dataset.extraId);
+      if (es && es.builder) openBuilderEditor(iso, el.dataset.extraId);
+      else if (es && es.hiit) openHiitResultEditor(iso, el.dataset.extraId);
+      else openExtraModal(iso, el.dataset.extraId);
+    });
+  });
+
+  // Toggle session body
+  document.querySelectorAll('[data-action="toggle-session-body"]').forEach(el => {
+    el.addEventListener("click", e => {
+      if (e.target.closest('[data-action="toggle-session-complete"]')) return;
+      const card = el.closest(".session-card");
+      const sid = card.dataset.sessionId;
+      const body = card.querySelector(".session-body");
+      const willOpen = body.classList.contains("collapsed");
+      body.classList.toggle("collapsed");
+      state.openSessions[sid] = willOpen;
+    });
+  });
+
+  // Toggle session complete (in-place — don't lose open panels or scroll)
+  document.querySelectorAll('[data-action="toggle-session-complete"]').forEach(el => {
+    el.addEventListener("click", e => {
+      e.stopPropagation();
+      const card = el.closest(".session-card");
+      const sid = card.dataset.sessionId;
+      const sl = getSessionLog(iso, sid);
+      sl.completed = !sl.completed;
+      saveData();
+      el.classList.toggle("on", sl.completed);
+      el.textContent = sl.completed ? "✓" : "";
+      card.classList.toggle("completed", sl.completed);
+      refreshDayCompleteButton(iso);
+    });
+  });
+
+  // Session notes
+  document.querySelectorAll('[data-action="session-notes"]').forEach(el => {
+    el.addEventListener("change", e => {
+      const sid = e.target.dataset.sessionId;
+      const sl = getSessionLog(iso, sid);
+      sl.notes = e.target.value;
+      saveData();
+    });
+  });
+
+  // Set inputs
+  document.querySelectorAll(".set-row[data-set-idx]").forEach(row => {
+    const idx = parseInt(row.dataset.setIdx, 10);
+    const exEl = row.closest(".exercise");
+    const sid = exEl.dataset.sessionId;
+    const exKey = exEl.dataset.exerciseKey;
+    row.querySelectorAll("input").forEach(inp => {
+      inp.addEventListener("change", () => {
+        const log = getExerciseLog(iso, sid, exKey);
+        if (!log.setsLogged[idx]) log.setsLogged[idx] = {};
+        const field = inp.dataset.field;
+        const val = inp.value === "" ? null : parseFloat(inp.value);
+        log.setsLogged[idx][field] = Number.isFinite(val) ? val : null;
+        saveData();
+      });
+    });
+    const chk = row.querySelector('[data-action="toggle-set"]');
+    chk.addEventListener("click", () => {
+      const log = getExerciseLog(iso, sid, exKey);
+      if (!log.setsLogged[idx]) log.setsLogged[idx] = {};
+      log.setsLogged[idx].completed = !log.setsLogged[idx].completed;
+      // Parent exercise flag was never being set - keep it in sync with its sets
+      const totalSets = exEl.querySelectorAll(".set-row[data-set-idx]").length;
+      let done = 0;
+      for (let i = 0; i < totalSets; i++) {
+        if (log.setsLogged[i] && log.setsLogged[i].completed) done++;
+      }
+      log.completed = totalSets > 0 && done === totalSets;
+      saveData();
+      chk.classList.toggle("on", log.setsLogged[idx].completed);
+      chk.textContent = log.setsLogged[idx].completed ? "✓" : "";
+    });
+  });
+
+  // Cardio
+  document.querySelectorAll('[data-action="set-cardio"]').forEach(inp => {
+    inp.addEventListener("change", () => {
+      const sid = inp.dataset.sessionId;
+      const field = inp.dataset.field;
+      const sl = getSessionLog(iso, sid);
+      const val = inp.value === "" ? null : parseFloat(inp.value);
+      sl[field] = Number.isFinite(val) ? val : null;
+      saveData();
+    });
+  });
+
+  // Day notes + complete
+  const dn = document.querySelector('[data-action="day-notes"]');
+  if (dn) dn.addEventListener("change", e => {
+    const day = getDay(iso);
+    day.dayNotes = e.target.value;
+    saveData();
+  });
+  const dc = document.querySelector('[data-action="toggle-day"]');
+  if (dc) dc.addEventListener("click", () => {
+    const day = getDay(iso);
+    day.dayComplete = !day.dayComplete;
+    const data = loadData();
+    if (day.dayComplete && !data.meta.setupComplete) {
+      data.meta.setupComplete = true;
+    }
+    saveData();
+    refreshDayCompleteButton(iso);
+  });
+}
+
+function refreshDayCompleteButton(iso) {
+  const data = loadData();
+  const rx = getPrescriptionForDate(iso, data.meta);
+  const day = data.days[iso] || null;
+  const allDone = rx.sessions.filter(s => s.type !== "rest").every(s => {
+    const sl = day && day.sessions[s.id];
+    return sl && sl.completed;
+  });
+  const isDayComplete = day && day.dayComplete;
+  const btn = document.querySelector('[data-action="toggle-day"]');
+  if (!btn) return;
+  btn.classList.toggle("on", isDayComplete);
+  btn.disabled = !allDone && !isDayComplete;
+  btn.textContent = isDayComplete ? "✓ Day Complete" : (allDone ? "Mark Day Complete" : "Tick all sessions first");
+}
+
+// ------------------------------------------------------------------
+// MODAL HELPERS
+// ------------------------------------------------------------------
+
+function openModal(title, contentHtml, onOpen) {
+  const root = document.getElementById("modal-root");
+  root.innerHTML = `
+    <div class="modal-bg" data-action="modal-bg">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="close-btn" data-action="close-modal">✕</div>
+        <h2>${title}</h2>
+        ${contentHtml}
+      </div>
+    </div>
+  `;
+  root.querySelector('[data-action="modal-bg"]').addEventListener("click", closeModal);
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  if (onOpen) onOpen(root);
+}
+
+function closeModal() {
+  document.getElementById("modal-root").innerHTML = "";
+}
+
+// ------------------------------------------------------------------
+// RENDERING — NUTRITION VIEW
+// ------------------------------------------------------------------
+
+function renderNutrition() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const iso = state.currentDate;
+  const total = dayTotalKcal(iso);
+  const prof = macrosEnabled() ? activeMacroTargets(iso) : null;
+  const target = prof ? prof.kcal : data.meta.dailyCalorieTarget;
+  const macroRows = renderMacroRows(iso);
+
+  let totalCard = "";
+  if (target != null && target > 0) {
+    const pct = Math.min(100, Math.round(total / target * 100));
+    const remaining = target - total;
+    const over = remaining < 0;
+    totalCard = `
+      <div class="kcal-total-card">
+        <div class="kcal-total-row">
+          <div class="kcal-total">${total}<span class="u">kcal</span></div>
+          <div class="kcal-target ${over ? "over" : ""}">
+            of <span class="n">${target}</span> target<br>
+            <span style="font-size: 12px;">${over ? Math.abs(remaining) + " over" : remaining + " left"}</span>
+          </div>
+        </div>
+        <div class="kcal-bar-track">
+          <div class="kcal-bar-fill ${over ? "over" : ""}" style="width: ${pct}%"></div>
+        </div>
+        ${macroRows}
+      </div>
+    `;
+  } else {
+    totalCard = `
+      <div class="kcal-total-card">
+        <div class="kcal-total-row">
+          <div class="kcal-total">${total}<span class="u">kcal today</span></div>
+        </div>
+        <div class="no-target-hint">
+          No daily target set. <a data-action="go-settings">Set one in Settings</a> to see remaining budget and a progress bar.
+        </div>
+        ${macroRows}
+      </div>
+    `;
+  }
+
+  let sectionsHtml = "";
+  for (const sec of MEAL_SECTIONS) {
+    const entries = getMealsForDay(iso)[sec.key];
+    const secTotal = sectionTotalKcal(iso, sec.key);
+    const recents = getSectionRecents(sec.key);
+
+    const showMacros = macrosEnabled();
+    const entriesHtml = entries.length
+      ? entries.map(e => {
+          const ms = showMacros ? macroSummary(e) : "";
+          return `
+          <div class="meal-entry" data-action="edit-entry" data-section="${sec.key}" data-entry-id="${e.id}">
+            <div class="m-name">${escapeHtml(e.name)}${ms ? `<span class="m-macros">${ms}</span>` : ""}</div>
+            <div class="m-kcal">${e.kcal} kcal</div>
+          </div>`;
+        }).join("")
+      : `<div class="meal-empty">No entries yet</div>`;
+
+    const favsMenuItems = recents.map(r => {
+      const ms = showMacros ? macroSummary(r) : "";
+      return `
+      <button class="fav-item" data-action="add-recent" data-section="${sec.key}" data-recent="${escapeHtml(JSON.stringify(r))}">
+        <span class="fi-name">${escapeHtml(r.name)}${ms ? `<span class="m-macros">${ms}</span>` : ""}</span>
+        <span class="fi-kcal">${r.kcal} kcal</span>
+      </button>`;
+    }).join("");
+
+    const favsButton = recents.length
+      ? `<button class="favs-btn" data-action="toggle-favs" data-section="${sec.key}">
+           <span>Favourites <span class="fb-count">(${recents.length})</span></span>
+           <span class="fb-caret">▾</span>
+         </button>`
+      : "";
+
+    sectionsHtml += `
+      <div class="meal-section" data-section="${sec.key}">
+        <div class="meal-section-head">
+          <h3>${sec.label}</h3>
+          <div class="sub">${secTotal} kcal</div>
+        </div>
+        <div class="meal-entries">${entriesHtml}</div>
+        <div class="meal-actions">
+          <button class="add-btn" data-action="add-entry" data-section="${sec.key}">+ Add</button>
+          ${favsButton}
+        </div>
+        ${recents.length ? `<div class="favs-menu" hidden>${favsMenuItems}</div>` : `<div class="no-favs-hint">Items you add here will appear as one-tap recents.</div>`}
+      </div>
+    `;
+  }
+
+  app.innerHTML = totalCard + sectionsHtml;
+
+  // Wire actions
+  app.querySelectorAll('[data-action="add-entry"]').forEach(btn => {
+    btn.addEventListener("click", () => openMealEntryModal(iso, btn.dataset.section, null));
+  });
+  app.querySelectorAll('[data-action="edit-entry"]').forEach(el => {
+    el.addEventListener("click", () => openMealEntryModal(iso, el.dataset.section, el.dataset.entryId));
+  });
+
+  // Toggle Favourites dropdown (in-place — don't re-render)
+  app.querySelectorAll('[data-action="toggle-favs"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const section = btn.closest(".meal-section");
+      const menu = section.querySelector(".favs-menu");
+      if (!menu) return;
+      const isHidden = menu.hasAttribute("hidden");
+      if (isHidden) menu.removeAttribute("hidden"); else menu.setAttribute("hidden", "");
+      btn.classList.toggle("open", isHidden);
+    });
+  });
+
+  // Tap a recent → log it into that section
+  app.querySelectorAll('[data-action="add-recent"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      let r;
+      try { r = JSON.parse(btn.dataset.recent); } catch (e) { return; }
+      const entry = { name: r.name, kcal: r.kcal };
+      for (const m of MACRO_FIELDS) {
+        if (r[m.key] != null) entry[m.key] = r[m.key];
+      }
+      addMealEntry(iso, btn.dataset.section, entry);
+      renderNutrition();
+      showToast(`${r.name} added`);
+    });
+  });
+
+  const gs = app.querySelector('[data-action="go-settings"]');
+  if (gs) gs.addEventListener("click", () => setView("settings"));
+}
+
+function renderMacroRows(iso) {
+  if (!macrosEnabled()) return "";
+  const totals = dayMacroTotals(iso);
+  const prof = activeMacroTargets(iso);
+  const anyTarget = MACRO_FIELDS.some(m => prof[m.key] != null && prof[m.key] > 0);
+  if (!totals.hasAny && !anyTarget) return "";
+  let rows = `<div class="macro-daytype">${prof.dayLabel} targets</div>`;
+  for (const m of MACRO_FIELDS) {
+    const val = Math.round(totals[m.key]);
+    const target = prof[m.key];
+    const hasTarget = target != null && target > 0;
+    const pct = hasTarget ? Math.min(100, Math.round(val / target * 100)) : 0;
+    const over = hasTarget && val > target;
+    rows += `
+      <div class="macro-row">
+        <div class="macro-name">${m.label}</div>
+        <div class="macro-bar-track">
+          <div class="macro-bar-fill${over ? " over" : ""}" style="width:${pct}%;background:${m.color}"></div>
+        </div>
+        <div class="macro-val${over ? " over" : ""}">${val}${hasTarget ? " / " + target : ""}g</div>
+      </div>`;
+  }
+  return `<div class="macro-block">${rows}</div>`;
+}
+
+function escapeHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function openMealEntryModal(iso, section, editEntryId) {
+  const editing = editEntryId ? getMealsForDay(iso)[section].find(e => e.id === editEntryId) : null;
+  const secLabel = MEAL_SECTIONS.find(s => s.key === section).label;
+  const showMacros = macrosEnabled();
+  const hasMacros = !!(editing && MACRO_FIELDS.some(m => editing[m.key] != null));
+  const html = `
+    <div class="form-row">
+      <label>Food name</label>
+      <input type="text" id="meal-name" value="${editing ? escapeHtml(editing.name) : ""}" placeholder="e.g. Chicken salad" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label>Calories</label>
+      <input type="number" inputmode="numeric" step="1" min="0" max="5000"
+             id="meal-kcal" value="${editing ? editing.kcal : ""}" placeholder="kcal">
+    </div>
+    ${showMacros ? `
+      <button class="macro-toggle-btn" data-action="toggle-macros" ${hasMacros ? "hidden" : ""}>+ Add macros</button>
+      <div id="macro-section" ${hasMacros ? "" : "hidden"}>
+        <div class="macro-input-grid">
+          ${MACRO_FIELDS.map(m => `
+            <div class="field">
+              <label>${m.label} (g)</label>
+              <input type="number" inputmode="decimal" step="0.1" min="0" max="999"
+                     data-macro="${m.key}"
+                     value="${editing && editing[m.key] != null ? editing[m.key] : ""}" placeholder="-">
+            </div>
+          `).join("")}
+        </div>
+        <div class="macro-derived" id="macro-derived"></div>
+      </div>
+    ` : ""}
+    <div class="modal-btn-row">
+      ${editing ? `<button class="btn danger" data-action="delete-entry">Delete</button>` : ""}
+      <button class="btn primary" data-action="save-entry">${editing ? "Save" : "Add to " + secLabel}</button>
+    </div>
+  `;
+  openModal(editing ? `Edit — ${secLabel}` : `Add to ${secLabel}`, html, root => {
+    setTimeout(() => { const el = root.querySelector("#meal-name"); if (el) el.focus(); }, 60);
+
+    const macroSection = root.querySelector("#macro-section");
+    const macroToggle  = root.querySelector('[data-action="toggle-macros"]');
+
+    function readMacroInputs() {
+      const out = {};
+      if (!macroSection) return out;
+      macroSection.querySelectorAll("[data-macro]").forEach(inp => {
+        const v = inp.value === "" ? null : parseFloat(inp.value);
+        out[inp.dataset.macro] = Number.isFinite(v) ? v : null;
+      });
+      return out;
+    }
+
+    function refreshDerived() {
+      const d = root.querySelector("#macro-derived");
+      if (!d) return;
+      const k = kcalFromMacros(readMacroInputs());
+      d.innerHTML = k == null ? "" :
+        `= <strong>${k} kcal</strong> from macros &middot; <a data-action="use-derived">use this</a>`;
+      const useBtn = d.querySelector('[data-action="use-derived"]');
+      if (useBtn) useBtn.addEventListener("click", () => {
+        root.querySelector("#meal-kcal").value = k;
+      });
+    }
+
+    if (macroToggle && macroSection) {
+      macroToggle.addEventListener("click", () => {
+        macroSection.removeAttribute("hidden");
+        macroToggle.setAttribute("hidden", "");
+        const first = macroSection.querySelector("[data-macro]");
+        if (first) first.focus();
+      });
+    }
+    if (macroSection) {
+      macroSection.querySelectorAll("[data-macro]").forEach(inp => {
+        inp.addEventListener("input", refreshDerived);
+      });
+      refreshDerived();
+    }
+
+    root.querySelector('[data-action="save-entry"]').addEventListener("click", () => {
+      const name = root.querySelector("#meal-name").value.trim();
+      const kcal = parseInt(root.querySelector("#meal-kcal").value, 10);
+      if (!name) { showToast("Name required"); return; }
+      if (!Number.isFinite(kcal) || kcal < 0) { showToast("Enter calories"); return; }
+      const payload = Object.assign({ name, kcal }, readMacroInputs());
+      if (editing) {
+        updateMealEntry(iso, section, editEntryId, payload);
+      } else {
+        addMealEntry(iso, section, payload);
+      }
+      closeModal();
+      renderNutrition();
+    });
+
+    const delBtn = root.querySelector('[data-action="delete-entry"]');
+    if (delBtn) delBtn.addEventListener("click", () => {
+      deleteMealEntry(iso, section, editEntryId);
+      closeModal();
+      renderNutrition();
+    });
+  });
+}
+
+// ------------------------------------------------------------------
+// EXTRA SESSION MODAL
+// ------------------------------------------------------------------
+
+function openExtraModal(iso, editId, forceQuick) {
+  const existing = editId ? getExtraSessions(iso).find(e => e.id === editId) : null;
+  // forceQuick carries the type to open ("gym" / "hiit"), not just a flag
+  const initialType = existing ? existing.type : (forceQuick || "run");
+
+  function typePickerHtml(selType) {
+    return EXTRA_TYPES.map(t => `
+      <button class="type-pick ${t.key === selType ? "on" : ""}" data-type="${t.key}">${t.label}</button>
+    `).join("");
+  }
+
+  function fieldsHtml(selType, e) {
+    const spec = EXTRA_TYPES.find(t => t.key === selType);
+    if (!spec) return "";
+    e = e || {};
+    let html = "";
+
+    if (spec.fields.name) {
+      html += `
+        <div class="form-row">
+          <label>Session name / focus</label>
+          <input type="text" id="ex-name" value="${e.name ? escapeHtml(e.name) : ""}" placeholder="e.g. Upper body, chest+arms" autocomplete="off">
+        </div>
+      `;
+    }
+    if (spec.fields.variant) {
+      const variants = spec.variants || [];
+      html += `
+        <div class="form-row">
+          <label>Type</label>
+          <select id="ex-variant">
+            ${variants.map(v => `<option value="${v}" ${e.variant === v ? "selected" : ""}>${cap(v)}</option>`).join("")}
+          </select>
+        </div>
+      `;
+    }
+    if (spec.fields.distanceKm) {
+      html += `
+        <div class="form-row">
+          <label>Distance (km)</label>
+          <input type="number" inputmode="decimal" step="0.1" min="0" max="200"
+                 id="ex-distance" value="${e.distanceKm != null ? e.distanceKm : ""}" placeholder="km">
+        </div>
+      `;
+    }
+    if (spec.fields.loadKg) {
+      html += `
+        <div class="form-row">
+          <label>Load (kg)</label>
+          <input type="number" inputmode="decimal" step="0.5" min="0" max="60"
+                 id="ex-load" value="${e.loadKg != null ? e.loadKg : ""}" placeholder="kg">
+        </div>
+      `;
+    }
+    if (spec.fields.durationMin) {
+      html += `
+        <div class="form-row">
+          <label>Time (min)</label>
+          <input type="number" inputmode="numeric" step="1" min="0" max="600"
+                 id="ex-duration" value="${e.durationMin != null ? e.durationMin : ""}" placeholder="min">
+        </div>
+      `;
+    }
+    if (spec.fields.hrAvg) {
+      html += `
+        <div class="form-row">
+          <label>Avg HR (bpm)</label>
+          <input type="number" inputmode="numeric" step="1" min="40" max="220"
+                 id="ex-hr" value="${e.hrAvg != null ? e.hrAvg : ""}" placeholder="—">
+        </div>
+      `;
+    }
+    html += `
+      <div class="form-row">
+        <label>Notes (optional)</label>
+        <input type="text" id="ex-notes" value="${e.notes ? escapeHtml(e.notes) : ""}" placeholder="conditions, gear, RPE …" autocomplete="off">
+      </div>
+    `;
+    return html;
+  }
+
+  const html = `
+    <div class="type-picker" id="ex-type-picker">${typePickerHtml(initialType)}</div>
+    <div id="ex-fields">${fieldsHtml(initialType, existing)}</div>
+    <div class="modal-btn-row">
+      ${existing ? `<button class="btn danger" data-action="delete-extra">Delete</button>` : ""}
+      <button class="btn primary" data-action="save-extra">${existing ? "Save" : "Log session"}</button>
+    </div>
+  `;
+
+  openModal(existing ? "Edit extra session" : "Log extra session", html, root => {
+    let currentType = initialType;
+
+    root.querySelectorAll('[data-type]').forEach(btn => {
+      btn.addEventListener("click", () => {
+        currentType = btn.dataset.type;
+        root.querySelector("#ex-type-picker").innerHTML = typePickerHtml(currentType);
+        root.querySelector("#ex-fields").innerHTML = fieldsHtml(currentType, existing && existing.type === currentType ? existing : null);
+        // Re-wire type picker after replace
+        root.querySelectorAll('[data-type]').forEach(b => b.addEventListener("click", () => {
+          const el = document.querySelector('[data-action="save-extra"]');
+          if (el) el.click.__reset = true;
+        }));
+        wireTypePicker();
+      });
+    });
+
+    function wireTypePicker() {
+      root.querySelectorAll("#ex-type-picker [data-type]").forEach(btn => {
+        btn.onclick = () => {
+          // Gym and HIIT get their full builders unless opened for a quick log
+          if (btn.dataset.type === "gym" && !existing && !forceQuick) {
+            closeModal();
+            openBuilder(iso);
+            return;
+          }
+          if (btn.dataset.type === "hiit" && !existing && !forceQuick) {
+            closeModal();
+            openHiit(iso);
+            return;
+          }
+          currentType = btn.dataset.type;
+          root.querySelector("#ex-type-picker").innerHTML = typePickerHtml(currentType);
+          root.querySelector("#ex-fields").innerHTML = fieldsHtml(currentType, existing && existing.type === currentType ? existing : null);
+          wireTypePicker();
+        };
+      });
+    }
+    wireTypePicker();
+
+    root.querySelector('[data-action="save-extra"]').addEventListener("click", () => {
+      const patch = { type: currentType };
+      const nameEl = root.querySelector("#ex-name");
+      const varEl  = root.querySelector("#ex-variant");
+      const distEl = root.querySelector("#ex-distance");
+      const loadEl = root.querySelector("#ex-load");
+      const durEl  = root.querySelector("#ex-duration");
+      const hrEl   = root.querySelector("#ex-hr");
+      const notesEl = root.querySelector("#ex-notes");
+      if (nameEl)  patch.name = nameEl.value.trim() || undefined;
+      if (varEl)   patch.variant = varEl.value || undefined;
+      if (distEl)  patch.distanceKm = distEl.value === "" ? null : parseFloat(distEl.value);
+      if (loadEl)  patch.loadKg    = loadEl.value === "" ? null : parseFloat(loadEl.value);
+      if (durEl)   patch.durationMin = durEl.value === "" ? null : parseInt(durEl.value, 10);
+      if (hrEl)    patch.hrAvg     = hrEl.value === "" ? null : parseInt(hrEl.value, 10);
+      if (notesEl) patch.notes    = notesEl.value.trim() || "";
+      // Require at least ONE data field beyond type
+      const hasData = patch.name || patch.variant || patch.distanceKm != null ||
+                      patch.loadKg != null || patch.durationMin != null || patch.hrAvg != null || patch.notes;
+      if (!hasData) { showToast("Add at least one detail"); return; }
+      if (existing) {
+        updateExtraSession(iso, editId, patch);
+      } else {
+        addExtraSession(iso, patch);
+      }
+      closeModal();
+      render();
+      showToast(existing ? "Session updated" : "Extra session logged");
+    });
+
+    const del = root.querySelector('[data-action="delete-extra"]');
+    if (del) del.addEventListener("click", () => {
+      deleteExtraSession(iso, editId);
+      closeModal();
+      render();
+      showToast("Deleted");
+    });
+  });
+}
+
+// ------------------------------------------------------------------
+// RENDERING — PREDICTOR VIEW (predicted vs actual weekly loss)
+// ------------------------------------------------------------------
+
+function renderPredictor() {
+  const app = document.getElementById("app");
+
+  if (!profileComplete()) {
+    app.innerHTML = `
+      <div class="card">
+        <h2>Complete your profile</h2>
+        <p class="muted" style="font-size: 13px; margin-top: 8px; line-height: 1.55;">
+          Prediction needs three one-time inputs to compute BMR (Mifflin-St Jeor):
+        </p>
+        <ul class="muted" style="font-size: 13px; padding-left: 18px; margin: 8px 0 14px;">
+          <li>Age (years)</li>
+          <li>Height (cm)</li>
+          <li>Sex (for the BMR formula)</li>
+        </ul>
+        <button class="btn primary" data-action="go-settings" style="width: 100%;">Open Settings</button>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom: 8px;">What this tab does</h3>
+        <p class="muted" style="font-size: 12px; line-height: 1.55;">
+          Once profile is set, compares your <strong>predicted</strong> weekly weight loss
+          (from calorie deficit ÷ ${KCAL_PER_KG_FAT} kcal/kg) against your
+          <strong>actual</strong> weekly loss (change in 7-day rolling weight average).
+          Predicted tends to run slightly ahead of actual over long stretches — that's
+          metabolic adaptation, not a bug.
+        </p>
+      </div>
+    `;
+    const gs = app.querySelector('[data-action="go-settings"]');
+    if (gs) gs.addEventListener("click", () => setView("settings"));
+    return;
+  }
+
+  const todayIso = todayISO();
+  const pred = predictedWeeklyLossKg(todayIso);
+  const actual = actualWeeklyLossKg(todayIso);
+
+  const fmtKg = v => (v == null ? null : (v >= 0 ? "−" : "+") + Math.abs(v).toFixed(2) + " kg");
+  const predText = pred == null
+    ? `<span class="dim">insufficient data</span>`
+    : `<span class="pred-val">${fmtKg(pred.kg)}</span><span class="pred-sub">based on ${pred.completeDays}/7 complete days</span>`;
+  const actualText = actual == null
+    ? `<span class="dim">insufficient data</span><span class="pred-sub">need weigh-ins across two weeks</span>`
+    : `<span class="actual-val">${fmtKg(actual)}</span><span class="pred-sub">7-day avg vs prior 7-day avg</span>`;
+
+  const weeklyBmr = bmrForDate(todayIso);
+  const latestWt = latestWeightOnOrBefore(todayIso);
+
+  app.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-tile">
+        <div class="label">Predicted this week</div>
+        <div class="pred-lines">${predText}</div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Actual this week</div>
+        <div class="pred-lines">${actualText}</div>
+      </div>
+    </div>
+    <div class="card" style="padding: 12px 14px; margin-bottom: 14px;">
+      <div style="font-size: 12px; color: var(--muted); line-height: 1.5;">
+        BMR from latest weigh-in (${latestWt != null ? latestWt.toFixed(1) + "kg" : "no weight yet"}):
+        <strong style="color: var(--text);">${weeklyBmr != null ? Math.round(weeklyBmr) + " kcal/day" : "—"}</strong>.
+        Total cals out = BMR + Garmin active cals. Deficit = out − food intake.
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <h3>Predicted vs actual — weekly</h3>
+      <div class="legend">
+        <span class="key"><span class="swatch" style="background:#ff6b35"></span>Predicted (from deficit)</span>
+        <span class="key"><span class="swatch" style="background:#60a5fa"></span>Actual (from scale)</span>
+      </div>
+      ${renderPredictorChart()}
+      <p style="font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5;">
+        Weeks with no complete days (missing food or active-cal logs) don't plot a predicted point.
+        Weeks without two rolling averages don't plot an actual point.
+      </p>
+    </div>
+  `;
+}
+
+function renderPredictorChart() {
+  const data = loadData();
+  const meta = data.meta;
+  const startMon = mondayOf(meta.startDate);
+  const todayIso = todayISO();
+
+  // Build weekly points from program start through this week
+  const points = [];
+  let cursor = addDays(startMon, 6); // first "week ending Sunday"
+  while (cursor <= todayIso) {
+    const pred = predictedWeeklyLossKg(cursor);
+    const act = actualWeeklyLossKg(cursor);
+    points.push({
+      date: cursor,
+      predicted: pred ? pred.kg : null,
+      actual: act
+    });
+    cursor = addDays(cursor, 7);
+  }
+
+  const W = 360, H = 220;
+  const pad = { top: 16, right: 12, bottom: 30, left: 42 };
+  const innerW = W - pad.left - pad.right;
+  const innerH = H - pad.top - pad.bottom;
+
+  if (!points.length) {
+    return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      <text x="${W/2}" y="${H/2}" font-size="12" fill="#707070" text-anchor="middle">No weeks completed yet</text>
+    </svg>`;
+  }
+
+  // Y range: symmetric around 0, pad to cover both series
+  const values = [];
+  points.forEach(p => {
+    if (p.predicted != null) values.push(p.predicted);
+    if (p.actual != null) values.push(p.actual);
+  });
+  const absMax = values.length ? Math.max(0.4, ...values.map(v => Math.abs(v))) : 0.5;
+  const yPad = Math.max(0.15, absMax * 0.15);
+  const ymin = -(absMax + yPad);
+  const ymax = absMax + yPad;
+
+  const xFor = i => points.length === 1 ? pad.left + innerW / 2 : pad.left + (i / (points.length - 1)) * innerW;
+  const yFor = v => pad.top + innerH - ((v - ymin) / (ymax - ymin)) * innerH;
+
+  // Grid at 0, ±0.25, ±0.5, ±0.75, ±1.0 within range
+  let grid = "";
+  const step = absMax > 1 ? 0.5 : 0.25;
+  for (let v = Math.ceil(ymin / step) * step; v <= ymax; v += step) {
+    const rv = Math.round(v * 100) / 100;
+    const y = yFor(rv);
+    const isZero = Math.abs(rv) < 0.001;
+    grid += `<line x1="${pad.left}" y1="${y}" x2="${W - pad.right}" y2="${y}" stroke="${isZero ? "#4a4a4a" : "#2a2a2a"}" stroke-width="${isZero ? 1 : 0.5}"/>`;
+    const label = (rv > 0 ? "−" : rv < 0 ? "+" : "") + Math.abs(rv).toFixed(2);
+    grid += `<text x="${pad.left - 6}" y="${y + 4}" font-size="9" fill="#707070" text-anchor="end">${label}</text>`;
+  }
+
+  // X labels — show every ~4th week (skip crowded)
+  let xLabels = "";
+  const labelEvery = Math.max(1, Math.ceil(points.length / 8));
+  points.forEach((p, i) => {
+    if (i % labelEvery !== 0 && i !== points.length - 1) return;
+    const x = xFor(i);
+    const dt = parseISO(p.date);
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const label = `${dt.getDate()}${months[dt.getMonth()].slice(0,3)}`;
+    xLabels += `<text x="${x}" y="${H - 10}" font-size="9" fill="#707070" text-anchor="middle">${label}</text>`;
+  });
+
+  // Build paths — break line on null values (draw only segments between adjacent non-null)
+  function buildPath(getter) {
+    let d = "";
+    let inSegment = false;
+    points.forEach((p, i) => {
+      const v = getter(p);
+      if (v == null) { inSegment = false; return; }
+      const cmd = inSegment ? "L" : "M";
+      d += cmd + xFor(i) + "," + yFor(v);
+      inSegment = true;
+    });
+    return d;
+  }
+  const predPath = buildPath(p => p.predicted);
+  const actPath = buildPath(p => p.actual);
+
+  // Dots
+  let predDots = "", actDots = "";
+  points.forEach((p, i) => {
+    if (p.predicted != null) {
+      predDots += `<circle cx="${xFor(i)}" cy="${yFor(p.predicted)}" r="3" fill="#ff6b35"/>`;
+    }
+    if (p.actual != null) {
+      actDots += `<circle cx="${xFor(i)}" cy="${yFor(p.actual)}" r="3" fill="#60a5fa"/>`;
+    }
+  });
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      ${grid}${xLabels}
+      ${predPath ? `<path d="${predPath}" stroke="#ff6b35" stroke-width="2" fill="none" stroke-linejoin="round"/>` : ""}
+      ${actPath ? `<path d="${actPath}" stroke="#60a5fa" stroke-width="2" fill="none" stroke-linejoin="round"/>` : ""}
+      ${predDots}${actDots}
+      <text x="${W - pad.right}" y="${pad.top - 4}" font-size="9" fill="#707070" text-anchor="end">↑ loss   ↓ gain</text>
+    </svg>
+  `;
+}
+
+// ------------------------------------------------------------------
+// RENDERING — STATS VIEW (charts + headline numbers)
+// ------------------------------------------------------------------
+
+function renderStats() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const meta = data.meta;
+  const pace = paceAnalysis();
+  const adh7  = adherence(7);
+  const adh28 = adherence(28);
+  const wtSeries = weightSeries();
+  const lastWt = wtSeries.length ? wtSeries[wtSeries.length - 1].value : null;
+  const rolling = currentRollingWeight();
+
+  let paceCard = "";
+  if (pace) {
+    const need = pace.requiredRate;
+    const got  = pace.actualRate;
+    const onTrack = got != null && got >= need * 0.85;
+    const paceCls = got == null ? "" : (onTrack ? "delta-good" : (got >= need * 0.5 ? "delta-warn" : "delta-bad"));
+    paceCard = `
+      <div class="card">
+        <h2>Pace check</h2>
+        <div class="stat-grid" style="margin-top: 10px;">
+          <div class="stat-tile">
+            <div class="label">Current (7-day avg)</div>
+            <div class="value">${pace.currentWt.toFixed(2)}<span style="font-size: 14px; color: var(--muted)"> kg</span></div>
+            <div class="sub">${pace.remainingKg.toFixed(2)} kg to go · ${Math.round(pace.remainingWeeks)} wk left</div>
+          </div>
+          <div class="stat-tile ${paceCls}">
+            <div class="label">Last 28 days</div>
+            <div class="value">${got != null ? (got >= 0 ? "−" : "+") + Math.abs(got).toFixed(2) : "—"}<span style="font-size: 14px; color: var(--muted)"> kg/wk</span></div>
+            <div class="sub">Required: ${need >= 0 ? "−" : "+"}${Math.abs(need).toFixed(2)} kg/wk</div>
+          </div>
+        </div>
+        <p style="font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5;">
+          ${got == null ? "Log at least 2 weigh-ins separated by a few days to compute pace." :
+            onTrack ? "✓ On track. Maintain current deficit." :
+            got >= need * 0.5 ? "⚠ Slightly behind required pace. Consider small deficit increase or check food logging accuracy." :
+            "⚠ Significantly off pace. Audit intake and energy expenditure assumptions."}
+        </p>
+      </div>
+    `;
+  }
+
+  const adhCard = `
+    <div class="stat-grid">
+      <div class="stat-tile">
+        <div class="label">Last 7 days</div>
+        <div class="value">${adh7 != null ? adh7 + "%" : "—"}</div>
+        <div class="sub">Session adherence</div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Last 28 days</div>
+        <div class="value">${adh28 != null ? adh28 + "%" : "—"}</div>
+        <div class="sub">Session adherence</div>
+      </div>
+    </div>
+  `;
+
+  app.innerHTML = `
+    ${adhCard}
+    ${paceCard}
+    <div class="chart-wrap">
+      <h3>Weight trajectory</h3>
+      <div class="legend">
+        <span class="key"><span class="swatch" style="background:#ff6b35"></span>Target line</span>
+        <span class="key"><span class="swatch" style="background:#60a5fa"></span>7-day avg</span>
+        <span class="key"><span class="swatch" style="background:#a0a0a0; height: 4px; border-radius: 50%"></span>Daily</span>
+      </div>
+      ${renderWeightChart()}
+    </div>
+    <div class="chart-wrap">
+      <h3>Active calories</h3>
+      <div class="legend">
+        <span class="key"><span class="swatch" style="background:#a78bfa; height: 8px"></span>Daily</span>
+        <span class="key"><span class="swatch" style="background:#facc15"></span>7-day avg</span>
+      </div>
+      ${renderCaloriesChart()}
+    </div>
+    ${renderVolumeCard()}
+    ${renderExerciseHistoryCard()}
+  `;
+  wireStatsExtras();
+}
+
+function renderWeightChart() {
+  const data = loadData();
+  const meta = data.meta;
+  const series = rollingAvg(weightSeries(), 7);
+  const startIso = meta.startDate;
+  const endIso = meta.targetDate;
+  const days = daysBetween(startIso, endIso);
+
+  // Chart dims
+  const W = 360, H = 220;
+  const pad = { top: 12, right: 12, bottom: 28, left: 36 };
+  const innerW = W - pad.left - pad.right;
+  const innerH = H - pad.top - pad.bottom;
+
+  // Y scale: pad around target & start
+  const yMin = Math.min(meta.targetWeightKg - 1.5, ...series.map(p => p.value));
+  const yMax = Math.max(meta.startWeightKg + 1.5, ...series.map(p => p.value));
+  const yPad = 0.5;
+  const ymin = Math.floor((yMin - yPad) * 2) / 2;
+  const ymax = Math.ceil((yMax + yPad) * 2) / 2;
+
+  const xForIso = iso => pad.left + (daysBetween(startIso, iso) / days) * innerW;
+  const yForVal = v => pad.top + innerH - ((v - ymin) / (ymax - ymin)) * innerH;
+
+  // Target trajectory line (start to target)
+  const x1 = xForIso(startIso), y1 = yForVal(meta.startWeightKg);
+  const x2 = xForIso(endIso),   y2 = yForVal(meta.targetWeightKg);
+
+  // Grid lines (every 1kg)
+  let grid = "";
+  for (let v = Math.ceil(ymin); v <= Math.floor(ymax); v++) {
+    const y = yForVal(v);
+    grid += `<line x1="${pad.left}" y1="${y}" x2="${W - pad.right}" y2="${y}" stroke="#2a2a2a" stroke-width="0.5"/>`;
+    grid += `<text x="${pad.left - 6}" y="${y + 4}" font-size="9" fill="#707070" text-anchor="end">${v}</text>`;
+  }
+
+  // X labels (months)
+  let xLabels = "";
+  let cur = parseISO(startIso);
+  cur.setDate(1);
+  if (cur < parseISO(startIso)) cur.setMonth(cur.getMonth() + 1);
+  while (isoDate(cur) <= endIso) {
+    const x = xForIso(isoDate(cur));
+    if (x > pad.left && x < W - pad.right) {
+      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      xLabels += `<text x="${x}" y="${H - 10}" font-size="9" fill="#707070" text-anchor="middle">${months[cur.getMonth()]}</text>`;
+      xLabels += `<line x1="${x}" y1="${pad.top}" x2="${x}" y2="${H - pad.bottom}" stroke="#1f1f1f" stroke-width="0.5"/>`;
+    }
+    cur.setMonth(cur.getMonth() + 1);
+  }
+
+  // Target line
+  const targetLine = `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#ff6b35" stroke-width="2" stroke-dasharray="4 3" opacity="0.7"/>`;
+
+  // Raw points
+  let pts = "";
+  series.forEach(p => {
+    const cx = xForIso(p.date), cy = yForVal(p.value);
+    pts += `<circle cx="${cx}" cy="${cy}" r="2" fill="#a0a0a0" opacity="0.8"/>`;
+  });
+
+  // Rolling avg line
+  let avgPath = "";
+  series.filter(p => p.avg != null).forEach((p, i) => {
+    const cx = xForIso(p.date), cy = yForVal(p.avg);
+    avgPath += (i === 0 ? "M" : "L") + cx + "," + cy;
+  });
+
+  // Today marker
+  const todayIso = todayISO();
+  let todayMarker = "";
+  if (todayIso >= startIso && todayIso <= endIso) {
+    const tx = xForIso(todayIso);
+    todayMarker = `<line x1="${tx}" y1="${pad.top}" x2="${tx}" y2="${H - pad.bottom}" stroke="#ff6b35" stroke-width="1" opacity="0.3"/>`;
+  }
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      ${grid}${xLabels}${todayMarker}${targetLine}
+      ${avgPath ? `<path d="${avgPath}" stroke="#60a5fa" stroke-width="2" fill="none"/>` : ""}
+      ${pts}
+    </svg>
+  `;
+}
+
+function renderCaloriesChart() {
+  const data = loadData();
+  const meta = data.meta;
+  const series = rollingAvg(caloriesSeries(), 7);
+  const startIso = meta.startDate;
+  const endIso = meta.targetDate;
+  const days = daysBetween(startIso, endIso);
+
+  const W = 360, H = 200;
+  const pad = { top: 10, right: 12, bottom: 28, left: 36 };
+  const innerW = W - pad.left - pad.right;
+  const innerH = H - pad.top - pad.bottom;
+
+  if (!series.length) {
+    return `
+      <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+        <text x="${W/2}" y="${H/2}" font-size="12" fill="#707070" text-anchor="middle">No active calories logged yet</text>
+      </svg>
+    `;
+  }
+
+  const ymax = Math.max(800, ...series.map(p => p.value)) * 1.1;
+
+  const xForIso = iso => pad.left + (daysBetween(startIso, iso) / days) * innerW;
+  const yForVal = v => pad.top + innerH - (v / ymax) * innerH;
+
+  // Y labels
+  let grid = "";
+  for (let v = 0; v <= ymax; v += 200) {
+    const y = yForVal(v);
+    grid += `<line x1="${pad.left}" y1="${y}" x2="${W - pad.right}" y2="${y}" stroke="#2a2a2a" stroke-width="0.5"/>`;
+    grid += `<text x="${pad.left - 4}" y="${y + 4}" font-size="9" fill="#707070" text-anchor="end">${v}</text>`;
+  }
+
+  // Bars
+  let bars = "";
+  const barW = Math.max(1.5, innerW / days * 0.7);
+  series.forEach(p => {
+    const cx = xForIso(p.date);
+    const cy = yForVal(p.value);
+    bars += `<rect x="${cx - barW/2}" y="${cy}" width="${barW}" height="${H - pad.bottom - cy}" fill="#a78bfa" opacity="0.6"/>`;
+  });
+
+  // Rolling avg
+  let avgPath = "";
+  series.filter(p => p.avg != null).forEach((p, i) => {
+    const cx = xForIso(p.date), cy = yForVal(p.avg);
+    avgPath += (i === 0 ? "M" : "L") + cx + "," + cy;
+  });
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      ${grid}
+      ${bars}
+      ${avgPath ? `<path d="${avgPath}" stroke="#facc15" stroke-width="2" fill="none"/>` : ""}
+    </svg>
+  `;
+}
+
+// ------------------------------------------------------------------
+// RENDERING — CALENDAR VIEW
+// ------------------------------------------------------------------
+
+function renderCalendar() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const { y, m } = state.calendarMonth;
+  const monthName = monthLabel(y, m);
+
+  app.innerHTML = `
+    <div class="cal-controls">
+      <button class="month-nav" data-action="prev-month">‹</button>
+      <div class="month-label">${monthName}</div>
+      <button class="month-nav" data-action="next-month">›</button>
+      <button class="print-btn" data-action="print-calendar">PRINT PDF</button>
+    </div>
+    <div class="cal-grid">
+      ${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => `<div class="dow">${d}</div>`).join("")}
+      ${buildMonthGrid(y, m)}
+    </div>
+    <div style="font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5;">
+      Tap any day to view or edit. Print PDF opens the browser print dialog — choose <strong>Save as PDF</strong>, page size <strong>A4 landscape</strong>, to get one month per sheet.
+    </div>
+  `;
+
+  app.querySelector('[data-action="prev-month"]').onclick = () => {
+    if (state.calendarMonth.m === 0) { state.calendarMonth.y--; state.calendarMonth.m = 11; }
+    else state.calendarMonth.m--;
+    render();
+  };
+  app.querySelector('[data-action="next-month"]').onclick = () => {
+    if (state.calendarMonth.m === 11) { state.calendarMonth.y++; state.calendarMonth.m = 0; }
+    else state.calendarMonth.m++;
+    render();
+  };
+  app.querySelector('[data-action="print-calendar"]').onclick = () => openPrintDialog();
+  app.querySelectorAll(".cal-day[data-date]").forEach(el => {
+    el.addEventListener("click", () => {
+      setDate(el.dataset.date);
+      setView("today");
+    });
+  });
+}
+
+function buildMonthGrid(y, m) {
+  const first = new Date(y, m, 1);
+  const dow = first.getDay();
+  const offset = dow === 0 ? 6 : dow - 1; // Monday start
+  const last = new Date(y, m + 1, 0).getDate();
+  const data = loadData();
+  const todayIso = todayISO();
+  let html = "";
+
+  for (let i = 0; i < offset; i++) {
+    html += `<div class="cal-day empty"></div>`;
+  }
+  for (let d = 1; d <= last; d++) {
+    const iso = `${y}-${pad(m+1)}-${pad(d)}`;
+    const rx = getPrescriptionForDate(iso, data.meta);
+    const day = data.days[iso] || null;
+    const completed = day && day.dayComplete;
+    const isToday = iso === todayIso;
+    let ses = "";
+    for (const s of rx.sessions) {
+      if (s.type === "rest") { ses += `<div class="ses rest">Rest</div>`; continue; }
+      const cls = s.type === "lift" ? "lift" : (s.type === "run" || s.type === "swim" ? "run" : "");
+      ses += `<div class="ses ${cls}">${s.name}</div>`;
+    }
+    const wt = day && day.weightKg != null ? `<div class="wt-pill">${day.weightKg.toFixed(1)}kg</div>` : "";
+    html += `
+      <div class="cal-day ${isToday ? "today" : ""} ${completed ? "completed" : ""}" data-date="${iso}">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <span class="dnum">${d}</span>
+          ${rx.meso && rx.meso.isDeload ? `<span style="font-size: 8px; color: var(--warn)">DEL</span>` : ""}
+        </div>
+        ${ses}
+        ${wt}
+      </div>
+    `;
+  }
+  return html;
+}
+
+// ------------------------------------------------------------------
+// PRINT — A4 LANDSCAPE CALENDAR
+// ------------------------------------------------------------------
+
+function openPrintDialog() {
+  const root = document.getElementById("print-root");
+  root.innerHTML = buildPrintCalendar();
+  // Allow layout to flush before invoking print
+  setTimeout(() => window.print(), 60);
+}
+
+function buildPrintCalendar() {
+  const data = loadData();
+  const start = parseISO(data.meta.sfetStartDate || data.meta.startDate);
+  const end = parseISO(data.meta.targetDate);
+  const startY = start.getFullYear(), startM = start.getMonth();
+  const endY = end.getFullYear(), endM = end.getMonth();
+  let y = startY, m = startM;
+  let html = "";
+  while (y < endY || (y === endY && m <= endM)) {
+    html += buildPrintMonth(y, m);
+    m++;
+    if (m > 11) { y++; m = 0; }
+  }
+  return html;
+}
+
+function buildPrintMonth(y, m) {
+  const data = loadData();
+  const monthName = monthLabel(y, m);
+  const first = new Date(y, m, 1);
+  const dow = first.getDay();
+  const offset = dow === 0 ? 6 : dow - 1;
+  const last = new Date(y, m + 1, 0).getDate();
+
+  let cells = "";
+  // DOW headers (within the grid)
+  ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].forEach(d => {
+    cells += `<div class="dow">${d}</div>`;
+  });
+
+  for (let i = 0; i < offset; i++) cells += `<div class="print-day empty"></div>`;
+
+  for (let d = 1; d <= last; d++) {
+    const iso = `${y}-${pad(m+1)}-${pad(d)}`;
+    const rx = getPrescriptionForDate(iso, data.meta);
+    let ses = "";
+    for (const s of rx.sessions) {
+      const cls = s.type === "lift" ? "lift" : (s.type === "rest" ? "rest" : "");
+      ses += `<div class="pses ${cls}">${s.name}</div>`;
+    }
+    let phaseTag = "";
+    if (rx.phase) {
+      phaseTag = `P${rx.phase.id}·M${rx.meso.meso}·W${rx.meso.weekInMeso}${rx.meso.isDeload ? " DELOAD" : ""}`;
+    }
+    cells += `
+      <div class="print-day">
+        <div class="dnum">${d}</div>
+        ${phaseTag ? `<div class="dtag">${phaseTag}</div>` : ""}
+        ${ses}
+      </div>
+    `;
+  }
+
+  // Trailing empties to complete grid (so all months have same height visually)
+  const totalCells = offset + last;
+  const trailing = (7 - (totalCells % 7)) % 7;
+  for (let i = 0; i < trailing; i++) cells += `<div class="print-day empty"></div>`;
+
+  // Determine grid row count
+  const rows = Math.ceil((offset + last) / 7) + 1; // +1 for DOW header row
+
+  return `
+    <div class="print-month">
+      <div class="print-header">
+        <h1>${monthName}</h1>
+        <div class="sub">Recomp program — ${data.meta.startWeightKg}kg → ${data.meta.targetWeightKg}kg · Phases: 1 Cut · 2 Fitness · 3 Training</div>
+      </div>
+      <div class="print-grid" style="grid-template-rows: 6mm repeat(${rows - 1}, 1fr);">
+        ${cells}
+      </div>
+    </div>
+  `;
+}
+
+// ------------------------------------------------------------------
+// RENDERING — SETTINGS VIEW
+// ------------------------------------------------------------------
+
+function renderSettings() {
+  const app = document.getElementById("app");
+  const data = loadData();
+  const meta = data.meta;
+
+  app.innerHTML = `
+    <details class="section" open>
+      <summary>Profile (for BMR / predictor)</summary>
+      <div class="section-body">
+        <div class="card">
+          <div class="settings-row">
+            <div class="label">Age<div class="desc">years</div></div>
+            <input type="number" step="1" min="15" max="100" data-setting="age" value="${meta.age != null ? meta.age : ""}" placeholder="—">
+          </div>
+          <div class="settings-row">
+            <div class="label">Height<div class="desc">cm</div></div>
+            <input type="number" step="1" min="120" max="230" data-setting="heightCm" value="${meta.heightCm != null ? meta.heightCm : ""}" placeholder="—">
+          </div>
+          <div class="settings-row">
+            <div class="label">Sex<div class="desc">for BMR formula</div></div>
+            <select data-setting="sex">
+              <option value="male" ${meta.sex === "male" ? "selected" : ""}>Male</option>
+              <option value="female" ${meta.sex === "female" ? "selected" : ""}>Female</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div class="label">CrossFit Rx loads<div class="desc">which prescribed column to show</div></div>
+            <select data-setting="hiitLoadSex">
+              <option value="male" ${meta.hiitLoadSex !== "female" ? "selected" : ""}>Men's</option>
+              <option value="female" ${meta.hiitLoadSex === "female" ? "selected" : ""}>Women's</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="section" open>
+      <summary>Program basics</summary>
+      <div class="section-body">
+        <div class="card">
+          <div class="settings-row">
+            <div class="label">Weight tracking start<div class="desc">First weigh-in date</div></div>
+            <input type="date" data-setting="startDate" value="${meta.startDate}">
+          </div>
+          <div class="settings-row">
+            <div class="label">SFET program start<div class="desc">Monday of Base Wk 1</div></div>
+            <input type="date" data-setting="sfetStartDate" value="${meta.sfetStartDate}">
+          </div>
+          <div class="settings-row">
+            <div class="label">SFET target date<div class="desc">Selection window</div></div>
+            <input type="date" data-setting="targetDate" value="${meta.targetDate}">
+          </div>
+          <div class="settings-row">
+            <div class="label">Start weight<div class="desc">kg</div></div>
+            <input type="number" step="0.1" data-setting="startWeightKg" value="${meta.startWeightKg}">
+          </div>
+          <div class="settings-row">
+            <div class="label">Target weight<div class="desc">kg</div></div>
+            <input type="number" step="0.1" data-setting="targetWeightKg" value="${meta.targetWeightKg}">
+          </div>
+          <div class="settings-row">
+            <div class="label">Daily calorie target<div class="desc">kcal — leave blank for none</div></div>
+            <input type="number" step="10" min="1000" max="5000" data-setting="dailyCalorieTarget" value="${meta.dailyCalorieTarget != null ? meta.dailyCalorieTarget : ""}" placeholder="—">
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>Macro tracking</summary>
+      <div class="section-body">
+        <div class="card">
+          <div class="settings-row">
+            <div class="label">Track macros<div class="desc">Adds protein / carbs / fat to food logging</div></div>
+            <label class="switch">
+              <input type="checkbox" data-setting-bool="macrosEnabled" ${meta.macrosEnabled ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+        ${meta.macrosEnabled ? `
+          <div class="muted" style="font-size:12px;margin:12px 2px 8px;line-height:1.5;">
+            Targets follow the day's training. Lift days push protein; ruck and long-run days push carbs.
+          </div>
+          ${renderMacroProfileEditor(meta)}
+          <div class="macro-sanity">${macroWeeklySummary(meta)}</div>
+        ` : `
+          <p class="muted" style="font-size:12px;margin:10px 2px 0;line-height:1.5;">
+            Off by default. Turn it on to get an <strong>+ Add macros</strong> button when logging food,
+            plus protein/carb/fat totals on the Food tab. Leave it off and nothing changes.
+          </p>`}
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>Tabs &amp; display</summary>
+      <div class="section-body">
+        <div class="card">
+          <div class="settings-row">
+            <div class="label">Food tab<div class="desc">Meal logging, macros, daily totals</div></div>
+            <label class="switch">
+              <input type="checkbox" data-setting-bool="foodEnabled" ${meta.foodEnabled !== false ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="settings-row">
+            <div class="label">Predictor tab<div class="desc">Predicted vs actual weekly loss</div></div>
+            <label class="switch">
+              <input type="checkbox" data-setting-bool="predictorEnabled" ${meta.predictorEnabled !== false ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+        <p class="muted" style="font-size:12px;margin:10px 2px 0;line-height:1.5;">
+          Switching either off removes it from the bottom bar and the remaining tabs resize to fill the row.
+          Today, Stats, Calendar and Settings always stay. Logged data is kept either way &mdash; turning a tab
+          back on shows everything again.
+        </p>
+      </div>
+    </details>
+
+    <details class="section" open>
+      <summary>SFET standards — log tests</summary>
+      <div class="section-body">
+        <div style="font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.55;">
+          Log a test result whenever you retest. Latest logged value + status shown per standard.
+          Time format: <strong>mm:ss</strong> (e.g. <code>15:30</code>).
+        </div>
+        <div id="standards-list"></div>
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>Data — backup & restore</summary>
+      <div class="section-body">
+        <p class="muted" style="font-size: 13px; margin: 0 0 12px;">
+          All data lives in this browser's localStorage. iOS may clear it if storage pressure is high — back up periodically.
+        </p>
+        <div class="btn-row">
+          <button class="btn primary" data-action="export-json">Export JSON</button>
+          <button class="btn" data-action="import-json">Import JSON</button>
+        </div>
+        <input type="file" id="import-file" accept=".json,application/json" style="display: none;">
+        <p class="muted" style="font-size: 11px; margin-top: 10px;">
+          Last backup: ${meta.lastBackupAt ? formatPrettyDate(meta.lastBackupAt.slice(0,10)) : "never"}
+        </p>
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>Danger zone</summary>
+      <div class="section-body">
+        <p class="muted" style="font-size: 13px; margin: 0 0 12px;">Wipe all data including logged days, weights, and overrides.</p>
+        <button class="btn danger" data-action="reset-all">Erase everything</button>
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>About this program</summary>
+      <div class="section-body">
+        <div style="font-size: 13px; color: var(--muted); line-height: 1.55;">
+          <p><strong>SFET prep — 26 weeks.</strong> 3x lift (Upper Push / Upper Pull / Lower Strength) + 4x run (threshold, speed, long, optional easy) + 1x kit swim + 1x ruck march + cadence work as lift finishers.</p>
+          <ul style="padding-left: 18px; margin: 8px 0;">
+            <li><strong>Phase 1 Base</strong> (wks 1-8): rebuild strength (6-10 reps), light ruck (6km/12kg), 20min threshold, 4×400m speed, 200m kit swim.</li>
+            <li><strong>Phase 2 Build</strong> (wks 9-20): strength endurance (5-8 reps), ruck progression to 9km/20kg, 28min threshold, 6×400m speed, 300m kit swim.</li>
+            <li><strong>Phase 3 Peak</strong> (wks 21-26): peak strength (3-6 reps), test-load ruck 11km/28kg @ 8:00/km, 30min threshold, 8×400m @ 3:45/km, 400m kit swim.</li>
+          </ul>
+          <p>Cadence push-ups/pull-ups baked into lift days as finishers (3 sets, submax → max as phases progress). Weekly template runs Mon push / Tue threshold+swim / Wed pull / Thu speed / Fri lower / Sat ruck / Sun long run. Deload every 4 weeks (halves volume, backs off intensity).</p>
+          <p class="version-line">
+            App <strong>${APP_VERSION}</strong> · data schema v${SCHEMA_VERSION}<span id="sw-cache-line"></span>
+          </p>
+          <p>Sources: SOCOMD SFET published standards; Tactical Barbell Green Protocol (concurrent SF prep); Helms, Muscle &amp; Strength Pyramid 3e (RPE progression); Wilson 2012 (concurrent-training interference); Seiler (polarized intensity distribution).</p>
+        </div>
+      </div>
+    </details>
+  `;
+
+  // Wire settings
+  app.querySelectorAll('[data-setting]').forEach(inp => {
+    inp.addEventListener("change", e => {
+      const key = inp.dataset.setting;
+      let v = e.target.value;
+      if (["startWeightKg","targetWeightKg"].includes(key)) v = parseFloat(v);
+      if (["dailyCalorieTarget","age","heightCm","proteinTargetG","carbTargetG","fatTargetG"].includes(key)) {
+        v = v === "" ? null : parseInt(v, 10);
+        if (v != null && !Number.isFinite(v)) v = null;
+      }
+      meta[key] = v;
+      saveData();
+      render();
+    });
+  });
+
+  app.querySelectorAll('[data-profile]').forEach(inp => {
+    inp.addEventListener("change", () => {
+      normaliseMacroProfiles(loadData());
+      const prof = inp.dataset.profile, field = inp.dataset.profileField;
+      const v = inp.value === "" ? null : parseInt(inp.value, 10);
+      meta.macroProfiles[prof][field] = Number.isFinite(v) ? v : null;
+      saveData();
+      render();
+    });
+  });
+
+  app.querySelectorAll('[data-setting-bool]').forEach(inp => {
+    inp.addEventListener("change", () => {
+      meta[inp.dataset.settingBool] = inp.checked;
+      saveData();
+      render();
+    });
+  });
+
+  // Show which service-worker cache is actually live, so a stale build is obvious
+  if (window.caches && caches.keys) {
+    caches.keys().then(keys => {
+      const el = document.getElementById("sw-cache-line");
+      if (el && keys.length) el.textContent = " · cache " + keys.join(", ");
+    }).catch(() => {});
+  }
+
+  // Standards list
+  renderStandardsList();
+
+  app.querySelector('[data-action="export-json"]').onclick = exportJson;
+  app.querySelector('[data-action="import-json"]').onclick = () => {
+    document.getElementById("import-file").click();
+  };
+  document.getElementById("import-file").onchange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => importJson(reader.result);
+    reader.readAsText(file);
+  };
+  app.querySelector('[data-action="reset-all"]').onclick = () => {
+    if (confirm("Erase ALL data? This cannot be undone.")) {
+      localStorage.removeItem(STORAGE_KEY);
+      _cachedData = null;
+      render();
+      showToast("All data erased");
+    }
+  };
+}
+
+function renderMacroProfileEditor(meta) {
+  normaliseMacroProfiles(loadData());
+  const fields = [["kcal", "kcal"], ["proteinG", "P g"], ["carbsG", "C g"], ["fatG", "F g"]];
+  let html = `<div class="profile-editor">`;
+  for (const key of ["lift", "endurance", "recovery"]) {
+    const p = meta.macroProfiles[key];
+    const derived = kcalFromMacros({ proteinG: p.proteinG, carbsG: p.carbsG, fatG: p.fatG });
+    const off = (derived != null && p.kcal) ? Math.abs(derived - p.kcal) > 60 : false;
+    html += `
+      <div class="profile-row">
+        <div class="profile-head">
+          <span class="profile-name">${MACRO_PROFILE_LABELS[key]}</span>
+          <span class="profile-derived ${off ? "warn" : ""}">${derived != null ? derived + " kcal from macros" : ""}</span>
+        </div>
+        <div class="profile-grid">
+          ${fields.map(([f, lbl]) => `
+            <div class="field">
+              <label>${lbl}</label>
+              <input type="number" inputmode="numeric" step="1" min="0" max="6000"
+                     data-profile="${key}" data-profile-field="${f}"
+                     value="${p[f] != null ? p[f] : ""}" placeholder="-">
+            </div>
+          `).join("")}
+        </div>
+      </div>`;
+  }
+  return html + `</div>`;
+}
+
+// Weekly average across the current template: 4 lift days, 3 endurance days.
+function macroWeeklySummary(meta) {
+  normaliseMacroProfiles(loadData());
+  const p = meta.macroProfiles;
+  const kcal = (4 * (p.lift.kcal || 0) + 3 * (p.endurance.kcal || 0)) / 7;
+  const prot = (4 * (p.lift.proteinG || 0) + 3 * (p.endurance.proteinG || 0)) / 7;
+  const bw = latestWeightOnOrBefore(todayISO()) || meta.targetWeightKg;
+  let out = `Weekly average <strong>${Math.round(kcal)} kcal</strong> and <strong>${Math.round(prot)}g protein</strong>`;
+  if (bw) {
+    const gkg = prot / bw;
+    out += ` &mdash; ${gkg.toFixed(2)} g/kg at ${bw}kg.`;
+    if (gkg < 1.6) out += ` Below the 1.6 g/kg hypertrophy floor.`;
+    else if (gkg > 2.6) out += ` Higher than needed; those calories would do more as carbs.`;
+  } else {
+    out += ".";
+  }
+  return out;
+}
+
+// Cross-check macro targets against the kcal target so the two can't silently disagree.
+function macroTargetSanity(meta) {
+  const derived = kcalFromMacros({
+    proteinG: meta.proteinTargetG, carbsG: meta.carbTargetG, fatG: meta.fatTargetG
+  });
+  if (derived == null) return "Set all three targets to cross-check them against your calorie target.";
+  const kcalTarget = meta.dailyCalorieTarget;
+  if (kcalTarget == null || kcalTarget <= 0) {
+    return "Macro targets come to <strong>" + derived + " kcal</strong>. No daily calorie target set to compare against.";
+  }
+  const diff = derived - kcalTarget;
+  if (Math.abs(diff) <= 50) {
+    return "Macro targets come to <strong>" + derived + " kcal</strong> - matches your " + kcalTarget + " kcal target.";
+  }
+  return "Macro targets come to <strong>" + derived + " kcal</strong>, which is " +
+         Math.abs(diff) + " kcal " + (diff > 0 ? "above" : "below") +
+         " your " + kcalTarget + " kcal target. Adjust one or the other.";
+}
+
+function renderStandardsList() {
+  const list = document.getElementById("standards-list");
+  if (!list) return;
+  let html = "";
+  for (const spec of SFET_STANDARDS) {
+    const latest = getLatestStandard(spec.id);
+    const status = latest ? standardStatus(spec.id, latest.value) : { label: "not tested", cls: "" };
+    const targetText = spec.unit === "time"
+      ? `min ${formatSecondsToTime(spec.min)} · comp ${formatSecondsToTime(spec.comp)}`
+      : spec.unit === "km"
+        ? `min ${spec.min}km · comp ${spec.comp}km`
+        : `min ${spec.min} reps · comp ${spec.comp}+ reps`;
+    html += `
+      <div class="std-row">
+        <div class="std-head">
+          <div class="std-label">${spec.label}</div>
+          <button class="std-log-btn" data-action="log-std" data-std-id="${spec.id}">+ Log</button>
+        </div>
+        <div class="std-body">
+          <div class="std-current">
+            <div class="std-current-val ${status.cls}">${latest ? formatStandardValue(spec.id, latest.value) : "—"}</div>
+            <div class="std-current-meta">${latest ? formatPrettyDate(latest.date) + " · " + status.label : "no test logged"}</div>
+          </div>
+          <div class="std-target">${targetText}</div>
+        </div>
+      </div>
+    `;
+  }
+  list.innerHTML = html;
+  list.querySelectorAll('[data-action="log-std"]').forEach(btn => {
+    btn.addEventListener("click", () => openStandardModal(btn.dataset.stdId));
+  });
+}
+
+function openStandardModal(stdId) {
+  const spec = SFET_STANDARDS.find(x => x.id === stdId);
+  if (!spec) return;
+  const isTime = spec.unit === "time";
+  const isKm = spec.unit === "km";
+  const inputPlaceholder = isTime ? "mm:ss" : (isKm ? "km" : "reps");
+  const targetLine = isTime
+    ? `Min pass ${formatSecondsToTime(spec.min)} · Competitive ${formatSecondsToTime(spec.comp)}`
+    : isKm
+      ? `Min pass ${spec.min}km · Competitive ${spec.comp}km`
+      : `Min pass ${spec.min} reps · Competitive ${spec.comp}+ reps`;
+
+  const log = getStandardsLog(stdId).slice().sort((a, b) => b.date.localeCompare(a.date));
+  const historyHtml = log.length
+    ? log.map((e, i) => `
+        <div class="std-history-row">
+          <span>${formatPrettyDate(e.date)}</span>
+          <span>${formatStandardValue(stdId, e.value)}</span>
+          <button class="del-btn" data-action="del-std-entry" data-idx="${log.length - 1 - i}">Remove</button>
+        </div>
+      `).join("")
+    : `<div class="muted" style="font-size: 12px; padding: 6px 0;">No tests logged yet.</div>`;
+
+  const html = `
+    <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px; line-height: 1.5;">${targetLine}</div>
+    <div class="form-row">
+      <label>Date</label>
+      <input type="date" id="std-date" value="${todayISO()}">
+    </div>
+    <div class="form-row">
+      <label>Result${isTime ? " (mm:ss)" : ""}</label>
+      <input type="${isTime ? "text" : "number"}" ${isTime ? "" : "inputmode=\"decimal\" step=\"0.1\" min=\"0\""}
+             id="std-value" placeholder="${inputPlaceholder}" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label>Notes (optional)</label>
+      <input type="text" id="std-notes" placeholder="conditions, kit, etc." autocomplete="off">
+    </div>
+    <div class="modal-btn-row">
+      <button class="btn primary" data-action="save-std">Log result</button>
+    </div>
+    ${log.length ? `
+      <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;">
+        <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">History</div>
+        <div class="std-history">${historyHtml}</div>
+      </div>
+    ` : ""}
+  `;
+
+  openModal(spec.label, html, root => {
+    setTimeout(() => { const el = root.querySelector("#std-value"); if (el) el.focus(); }, 60);
+
+    root.querySelector('[data-action="save-std"]').addEventListener("click", () => {
+      const date = root.querySelector("#std-date").value;
+      const raw = root.querySelector("#std-value").value.trim();
+      const notes = root.querySelector("#std-notes").value.trim();
+      let value;
+      if (isTime) {
+        value = parseTimeToSeconds(raw);
+        if (value == null) { showToast("Enter time as mm:ss"); return; }
+      } else {
+        value = parseFloat(raw);
+        if (!Number.isFinite(value) || value < 0) { showToast("Enter a valid number"); return; }
+      }
+      if (!date) { showToast("Date required"); return; }
+      addStandardEntry(stdId, { date, value, notes });
+      closeModal();
+      renderStandardsList();
+      showToast("Test logged");
+    });
+
+    root.querySelectorAll('[data-action="del-std-entry"]').forEach(btn => {
+      btn.addEventListener("click", () => {
+        deleteStandardEntry(stdId, parseInt(btn.dataset.idx, 10));
+        openStandardModal(stdId);
+        renderStandardsList();
+      });
+    });
+  });
+}
+
+function exportJson() {
+  const data = loadData();
+  data.meta.lastBackupAt = new Date().toISOString();
+  saveData();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `recomp-backup-${todayISO()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
+  showToast("Backup downloaded");
+}
+
+function importJson(jsonText) {
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed.meta || !parsed.days) throw new Error("Not a valid backup file");
+    if (!confirm("This will replace ALL current data. Continue?")) return;
+    _cachedData = parsed;
+    _cachedData.meta = Object.assign({}, DEFAULT_META, parsed.meta);
+    _cachedData.shiftRoster = parsed.shiftRoster || {};
+    _cachedData.days = parsed.days || {};
+    _cachedData.favorites = parsed.favorites || [];
+    _cachedData.standardsLog = parsed.standardsLog || {};
+    // An imported file may predate any of these. loadData() short-circuits on the
+    // cache we just set, so the migrations have to be run here explicitly or the
+    // app sits in a half-migrated state until the next reload.
+    ensureRecentsSeeded(_cachedData);
+    ensureSfetMigrated(_cachedData);
+    ensurePhase2Migrated(_cachedData);
+    normaliseMacroProfiles(_cachedData);
+    ensureBuilderMigrated(_cachedData);
+    ensureHiitMigrated(_cachedData);
+    _cachedData.schemaVersion = SCHEMA_VERSION;
+    saveData();
+    render();
+    showToast("Backup restored");
+  } catch (e) {
+    showToast("⚠ Invalid backup file");
+    console.error(e);
+  }
+}
+// ------------------------------------------------------------------
+// AUDIO  (shared by both builders)
+// iOS keeps the context suspended until a user gesture, so primeAudio()
+// must be called from inside a tap - not on load, not on a timer.
+// ------------------------------------------------------------------
+let _actx = null;
+function primeAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    let fresh = false;
+    if (!_actx) { _actx = new AC(); fresh = true; }
+    if (_actx.state === "suspended") { _actx.resume(); fresh = true; }
+    if (fresh) beep(1, 0.01);   // silent tick unlocks the context on iOS
+  } catch (e) {}
+}
+function beep(freq, seconds, gainVal) {
+  if (!_actx) return;
+  try {
+    const o = _actx.createOscillator(), g = _actx.createGain();
+    o.frequency.value = freq || 880;
+    g.gain.value = gainVal == null ? 0.25 : gainVal;
+    o.connect(g); g.connect(_actx.destination);
+    o.start();
+    o.stop(_actx.currentTime + (seconds || 0.12));
+  } catch (e) {}
+}
+function beepLow()  { beep(560, 0.14); }
+function beepHigh() { beep(1040, 0.30); }
+
+// ------------------------------------------------------------------
+// MAIN RENDER
+// ------------------------------------------------------------------
+
+// Tabs the user can switch off. Today / Stats / Calendar / Settings always stay.
+const OPTIONAL_TABS = {
+  predictor: "predictorEnabled",
+  nutrition: "foodEnabled"
+};
+
+function tabIsHidden(view, meta) {
+  const flag = OPTIONAL_TABS[view];
+  return !!flag && meta[flag] === false;
+}
+
+function applyTabVisibility() {
+  const meta = loadData().meta;
+  const nav = document.querySelector("nav.tabs");
+  if (!nav) return;
+  nav.querySelectorAll("button").forEach(b => {
+    b.hidden = tabIsHidden(b.dataset.view, meta);
+  });
+  const shown = Array.from(nav.querySelectorAll("button")).filter(b => !b.hidden).length;
+  nav.style.gridTemplateColumns = "repeat(" + shown + ", minmax(0, 1fr))";
+  nav.dataset.count = shown;
+  syncNavHeight();
+}
+
+// Feed the tab bar's real height back into the layout so content never sits under it.
+function syncNavHeight() {
+  const nav = document.querySelector("nav.tabs");
+  if (!nav) return;
+  const apply = () => {
+    const h = nav.offsetHeight;
+    if (h > 0) document.documentElement.style.setProperty("--nav-h", h + "px");
+  };
+  apply();                       // sync: rAF is paused while the page is backgrounded
+  requestAnimationFrame(apply);  // refine once layout has settled
+}
+
+window.addEventListener("resize", syncNavHeight);
+window.addEventListener("orientationchange", syncNavHeight);
+
+function render() {
+  // Don't strand the user on a tab they just turned off
+  if (tabIsHidden(state.view, loadData().meta)) {
+    state.view = "today";
+    document.querySelectorAll("nav.tabs button").forEach(b =>
+      b.classList.toggle("active", b.dataset.view === "today"));
+  }
+  applyTabVisibility();
+  renderTopbar();
+  if (state.view === "today") renderToday();
+  else if (state.view === "nutrition") renderNutrition();
+  else if (state.view === "predictor") renderPredictor();
+  else if (state.view === "stats") renderStats();
+  else if (state.view === "calendar") renderCalendar();
+  else if (state.view === "settings") renderSettings();
+}

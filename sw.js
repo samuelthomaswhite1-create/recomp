@@ -1,7 +1,10 @@
 // Recomp Tracker service worker
 // Bump CACHE_VERSION when you upload a new index.html so phones pick up the change.
-const CACHE_VERSION = "recomp-v12";
-const ASSETS = ["./", "./index.html"];
+const CACHE_VERSION = "recomp-v17";
+// Every file the app needs offline. addAll() is atomic - one bad path and the
+// whole install rejects, leaving no offline cache at all.
+const ASSETS = ["./", "./index.html", "./app.css",
+                "./app.js", "./builder.js", "./hiit.js", "./boot.js"];
 
 self.addEventListener("install", event => {
   event.waitUntil(
